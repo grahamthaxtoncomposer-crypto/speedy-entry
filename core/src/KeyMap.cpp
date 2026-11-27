@@ -43,6 +43,8 @@ namespace
         { Command::AutoStem, "AutoStem" },
         { Command::HideEntry, "HideEntry" },
         { Command::GraceNote, "GraceNote" },
+        { Command::SlashGraceNote, "SlashGraceNote" },
+        { Command::FreezeAccidental, "FreezeAccidental" },
         { Command::Staccato, "Staccato" },
         { Command::Tenuto, "Tenuto" },
         { Command::Accent, "Accent" },
@@ -59,6 +61,22 @@ namespace
         { Command::StaffUp, "StaffUp" },
         { Command::StaffDown, "StaffDown" },
         { Command::ToggleInsertMode, "ToggleInsertMode" },
+        { Command::SetLayer, "SetLayer" },
+        { Command::ToggleVoice, "ToggleVoice" },
+        { Command::ToggleFrame, "ToggleFrame" },
+        { Command::SelectNext, "SelectNext" },
+        { Command::SelectPrev, "SelectPrev" },
+        { Command::SelectMeasure, "SelectMeasure" },
+        { Command::SelectAll, "SelectAll" },
+        { Command::Copy, "Copy" },
+        { Command::Cut, "Cut" },
+        { Command::Paste, "Paste" },
+        { Command::ClearSelection, "ClearSelection" },
+        { Command::SetDynamic, "SetDynamic" },
+        { Command::DynamicsMenu, "DynamicsMenu" },
+        { Command::ShowCommands, "ShowCommands" },
+        { Command::PrevClip, "PrevClip" },
+        { Command::NextClip, "NextClip" },
         { Command::Undo, "Undo" },
         { Command::Redo, "Redo" },
         { Command::MeasureMenu, "MeasureMenu" },
@@ -183,11 +201,13 @@ bool parseKey (const std::string& textIn, KeyStroke& out)
 // handled with other tools.
 const char* KeyMap::defaultText()
 {
-    return R"(# Staff Paper key map
+    return R"(# Key map
 # Format:  key = Command [argument]
 # Modifiers: ctrl+ (Command on Mac), alt+ (Option on Mac), shift+
 # Named keys: up down left right enter backspace delete insert tab esc
 #             home end pageup pagedown space equals plus minus hash
+# The defaults follow the published Speedy Entry keys for the Mac. Where a
+# second key is listed it is an alias (Cmd instead of Option, laptop keys).
 
 # --- durations: 1 = 64th, 2 = 32nd, 3 = 16th, 4 = eighth, 5 = quarter, 6 = half, 7 = whole, 8 = double whole
 1 = EnterValue 1
@@ -206,7 +226,15 @@ shift+4 = InsertValue 4
 shift+5 = InsertValue 5
 shift+6 = InsertValue 6
 shift+7 = InsertValue 7
-# ctrl + shift + number enters a rest
+# option + shift + number enters a rest
+alt+shift+1 = EnterRestValue 1
+alt+shift+2 = EnterRestValue 2
+alt+shift+3 = EnterRestValue 3
+alt+shift+4 = EnterRestValue 4
+alt+shift+5 = EnterRestValue 5
+alt+shift+6 = EnterRestValue 6
+alt+shift+7 = EnterRestValue 7
+alt+shift+8 = EnterRestValue 8
 ctrl+shift+1 = EnterRestValue 1
 ctrl+shift+2 = EnterRestValue 2
 ctrl+shift+3 = EnterRestValue 3
@@ -216,7 +244,14 @@ ctrl+shift+6 = EnterRestValue 6
 ctrl+shift+7 = EnterRestValue 7
 ctrl+shift+8 = EnterRestValue 8
 . = Dot
-# ctrl + number starts a tuplet (3 = triplet, 5 = quintuplet ...); ctrl+1 = any ratio
+# option + number starts a tuplet (3 = triplet, 5 = quintuplet ...); option+1 = any ratio
+alt+1 = TupletDialog
+alt+2 = StartTuplet 2
+alt+3 = StartTuplet 3
+alt+4 = StartTuplet 4
+alt+5 = StartTuplet 5
+alt+6 = StartTuplet 6
+alt+7 = StartTuplet 7
 ctrl+1 = TupletDialog
 ctrl+2 = StartTuplet 2
 ctrl+3 = StartTuplet 3
@@ -235,36 +270,52 @@ delete = DeleteEntry
 # --- accidentals and spelling
 plus = RaiseHalfStep
 minus = LowerHalfStep
+alt+plus = RaiseHalfStepMeasure
+alt+minus = LowerHalfStepMeasure
 ctrl+plus = RaiseHalfStepMeasure
 ctrl+minus = LowerHalfStepMeasure
 9 = Enharmonic
+alt+9 = EnharmonicMeasure
 ctrl+9 = EnharmonicMeasure
 * = ToggleAccidental
 shift+8 = ToggleAccidental
+alt+* = FreezeAccidental
+alt+shift+* = FreezeAccidental
 p = AccidentalParens
 
-# --- ties, beams, stems, visibility
+# --- ties, beams, stems, visibility, grace notes
 equals = TieNext
 t = TieNext
+alt+equals = TiePrevious
+shift+t = TiePrevious
 ctrl+equals = TiePrevious
-ctrl+t = TiePrevious
 / = BreakJoinBeam
 b = BreakJoinBeam
 shift+b = ResetBeams
 \ = FlatBeam
 m = FlatBeam
 l = FreezeStem
+alt+l = AutoStem
 ctrl+l = AutoStem
 o = HideEntry
 h = HideEntry
 ; = GraceNote
+` = SlashGraceNote
 
-# --- articulations and slurs (Staff Paper: these change playback)
+# --- layers (voices)
+' = ToggleVoice
+ctrl+alt+1 = SetLayer 1
+ctrl+alt+2 = SetLayer 2
+ctrl+alt+3 = SetLayer 3
+ctrl+alt+4 = SetLayer 4
+
+# --- articulations, slurs, dynamics (these change playback)
 alt+s = Staccato
 alt+t = Tenuto
 alt+a = Accent
-alt+9 = SlurStart
-alt+0 = SlurEnd
+( = SlurStart
+) = SlurEnd
+alt+d = DynamicsMenu
 
 # --- moving around
 up = CursorUp
@@ -279,12 +330,26 @@ shift+up = StaffUp
 shift+down = StaffDown
 insert = ToggleInsertMode
 ctrl+i = ToggleInsertMode
+shift+i = ToggleInsertMode
+esc = ToggleFrame
+
+# --- selecting, copy and paste
+shift+right = SelectNext
+shift+left = SelectPrev
+ctrl+shift+m = SelectMeasure
+ctrl+a = SelectAll
+ctrl+c = Copy
+ctrl+x = Cut
+ctrl+v = Paste
 
 # --- general
 ctrl+z = Undo
 ctrl+y = Redo
 ctrl+shift+z = Redo
 alt+m = MeasureMenu
+ctrl+k = ShowCommands
+ctrl+alt+left = PrevClip
+ctrl+alt+right = NextClip
 )";
 }
 

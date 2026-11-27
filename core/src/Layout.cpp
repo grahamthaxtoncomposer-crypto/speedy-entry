@@ -6,12 +6,12 @@
 namespace staffpaper
 {
 
-std::vector<Tick> entryOnsets (const StaffMeasure& m)
+std::vector<Tick> entryOnsets (const std::vector<Entry>& entries)
 {
     std::vector<Tick> out;
-    out.reserve (m.entries.size());
+    out.reserve (entries.size());
     Tick t = 0;
-    for (const auto& e : m.entries)
+    for (const auto& e : entries)
     {
         out.push_back (t);
         t += e.duration();
@@ -32,16 +32,16 @@ bool isBeamable (const Entry& e)
     return ! e.rest && e.value <= 4; // eighth or shorter
 }
 
-std::vector<bool> beamedToPrevious (const Score& s, int staff, int measure)
+std::vector<bool> beamedToPrevious (const Score& s, int staff, int measure, int layer)
 {
-    const auto& m = s.staves[staff].measures[measure];
-    const auto onsets = entryOnsets (m);
+    const auto& es = s.staves[staff].measures[measure].layers[layer];
+    const auto onsets = entryOnsets (es);
     const Tick g = beamGroupLength (s.timeSigAt (measure));
-    std::vector<bool> out (m.entries.size(), false);
-    for (size_t i = 1; i < m.entries.size(); ++i)
+    std::vector<bool> out (es.size(), false);
+    for (size_t i = 1; i < es.size(); ++i)
     {
-        const auto& a = m.entries[i - 1];
-        const auto& b = m.entries[i];
+        const auto& a = es[i - 1];
+        const auto& b = es[i];
         if (! isBeamable (a) || ! isBeamable (b) || a.grace != b.grace) continue;
         if (b.beam == BeamMode::BreakBefore) continue;
         if (b.beam == BeamMode::JoinBefore) { out[i] = true; continue; }
@@ -53,9 +53,9 @@ std::vector<bool> beamedToPrevious (const Score& s, int staff, int measure)
     return out;
 }
 
-std::vector<std::vector<int>> beamGroups (const Score& s, int staff, int measure)
+std::vector<std::vector<int>> beamGroups (const Score& s, int staff, int measure, int layer)
 {
-    const auto joined = beamedToPrevious (s, staff, measure);
+    const auto joined = beamedToPrevious (s, staff, measure, layer);
     std::vector<std::vector<int>> groups;
     std::vector<int> cur;
     for (int i = 0; i < (int) joined.size(); ++i)
@@ -76,10 +76,17 @@ int staffPosition (int dia, Clef clef)
     return dia - clefMiddleLine (clef);
 }
 
-bool autoStemUp (const Entry& e, Clef clef)
+int layerStemRule (const StaffMeasure& m, int layer)
+{
+    if (! m.multiLayer()) return 0;
+    return (layer % 2 == 0) ? +1 : -1;
+}
+
+bool autoStemUp (const Entry& e, Clef clef, int layerRule)
 {
     if (e.stem == StemDir::Up) return true;
     if (e.stem == StemDir::Down) return false;
+    if (layerRule != 0) return layerRule > 0;
     if (e.notes.empty()) return true;
     const int lo = staffPosition (e.notes.front().pitch.dia, clef);
     const int hi = staffPosition (e.notes.back().pitch.dia, clef);
@@ -87,17 +94,18 @@ bool autoStemUp (const Entry& e, Clef clef)
     return std::abs (lo) > std::abs (hi) ? lo < 0 : hi < 0;
 }
 
-bool groupStemUp (const StaffMeasure& m, const std::vector<int>& group, Clef clef)
+bool groupStemUp (const std::vector<Entry>& entries, const std::vector<int>& group, Clef clef, int layerRule)
 {
     for (int i : group)
     {
-        const auto& e = m.entries[i];
+        const auto& e = entries[i];
         if (e.stem == StemDir::Up) return true;
         if (e.stem == StemDir::Down) return false;
     }
+    if (layerRule != 0) return layerRule > 0;
     int lo = 1000, hi = -1000;
     for (int i : group)
-        for (const auto& n : m.entries[i].notes)
+        for (const auto& n : entries[i].notes)
         {
             const int p = staffPosition (n.pitch.dia, clef);
             lo = std::min (lo, p);

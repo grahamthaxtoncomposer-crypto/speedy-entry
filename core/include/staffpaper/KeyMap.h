@@ -42,6 +42,8 @@ enum class Command
     AutoStem,
     HideEntry,
     GraceNote,
+    SlashGraceNote,
+    FreezeAccidental,
     // articulations and phrasing (playback-aware)
     Staccato,
     Tenuto,
@@ -60,6 +62,25 @@ enum class Command
     StaffUp,
     StaffDown,
     ToggleInsertMode,
+    // layers (voices)
+    SetLayer,           // arg = 1..4
+    ToggleVoice,        // switch between layer 1 and 2
+    // entry frame and selection
+    ToggleFrame,        // leave the entry frame, or go back into the last measure
+    SelectNext,         // extend the selection by one entry to the right
+    SelectPrev,
+    SelectMeasure,
+    SelectAll,
+    Copy,
+    Cut,
+    Paste,
+    ClearSelection,     // delete the selected music (rests remain in layer 1)
+    // dynamics
+    SetDynamic,         // arg = 1 (pppp) ... 10 (ffff)
+    DynamicsMenu,       // handled by the UI
+    ShowCommands,       // handled by the UI
+    PrevClip,           // handled by the UI
+    NextClip,
     // general
     Undo,
     Redo,

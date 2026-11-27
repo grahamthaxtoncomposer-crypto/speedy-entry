@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "ClipView.h"
+#include "HouseLook.h"
 #include "PluginProcessor.h"
 #include "StaffView.h"
 
@@ -23,18 +24,21 @@ private:
     std::unique_ptr<staffpaper::Editor> editor;
     int editorClip = -1;
 
+    HouseLook look;
     StaffView staff;
     ClipView clips;
-    juce::Viewport clipViewport;
 
-    // top bar
-    juce::TextButton notationTab { "Notation" }, clipsTab { "Clips" };
-    juce::Label clipName;
-    juce::ToggleButton syncToggle { "Sync to Bitwig" };
+    // toolbar
+    juce::TextButton speedyTool { "Speedy" }, selectTool { "Select" }, insertButton { "Insert" };
+    juce::TextButton layerButtons[staffpaper::kLayers];
+    juce::ComboBox gridBox;
+    juce::TextButton tempoSync { "Tempo: Bitwig" }, meterSync { "Meter: Bitwig" };
     juce::TextButton playButton, stopButton, rewindButton;
     juce::Slider tempoSlider;
-    juce::TextButton viewButton, zoomOut { "-" }, zoomIn { "+" }, themeButton, keysButton { "Keys" }, settingsButton { "Settings" };
-    juce::TextButton dragButton { "Drag MIDI" };
+    juce::TextButton hearButton { "Hear notes" };
+    juce::TextButton exportButton { "Export MusicXML" }, dragButton { "Drag MIDI" };
+    juce::TextButton commandsButton { "Commands" }, settingsButton { "Settings" };
+    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, themeButton, colourButton;
 
     // status bar
     juce::String lastKey, lastCommand;
@@ -42,20 +46,22 @@ private:
     // overlays
     std::unique_ptr<juce::Component> overlay;
 
-    bool showingClips = false;
-    juce::LookAndFeel_V4 lnf;
+    uint32_t shownTrackColour = 0;
+    std::unique_ptr<juce::FileChooser> chooser;
 
     void bindEditor();
+    void selectClip (int index);
     void edited();
     void applyTheme();
-    void showNotation();
-    void showClips();
-    void showKeysWindow();
+    juce::Colour accentColour() const;
+    void refreshToolbar();
+    void showCommandsWindow();
     void showSettings();
+    void showColourMenu();
+    void exportMusicXml();
     void startMidiDrag (int clipIndex);
     juce::File writeMidiFile (int clipIndex);
     void timerCallback() override;
-    void updateTransportButtons();
     double writtenTickFromPerformance (int clip, double tick) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StaffPaperEditor)

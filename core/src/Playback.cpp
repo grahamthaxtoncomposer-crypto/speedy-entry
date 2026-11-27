@@ -64,14 +64,81 @@ namespace
     };
 } // namespace
 
+VelocityTable computeVelocities (const Score& s)
+{
+    const auto& pb = s.playback;
+    VelocityTable table (s.staves.size());
+    for (size_t st = 0; st < s.staves.size(); ++st)
+    {
+        const auto& staff = s.staves[st];
+        // dynamic marks of this staff by written time (any layer)
+        std::vector<std::pair<Tick, int>> marks;
+        for (int m = 0; m < s.numMeasures(); ++m)
+            for (int l = 0; l < kLayers; ++l)
+            {
+                Tick t = s.measureStart (m);
+                for (const auto& e : staff.measures[(size_t) m].layers[(size_t) l])
+                {
+                    if (e.dynamic) marks.push_back ({ t, pb.dynamicVelocity[(size_t) *e.dynamic] });
+                    t += e.duration();
+                }
+            }
+        std::stable_sort (marks.begin(), marks.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
+        auto levelAt = [&] (Tick t) {
+            int v = pb.velocity;
+            for (const auto& [mt, mv] : marks)
+            {
+                if (mt > t) break;
+                v = mv;
+            }
+            return v;
+        };
+
+        table[st].resize ((size_t) s.numMeasures());
+        for (int l = 0; l < kLayers; ++l)
+        {
+            bool inSlur = false;
+            for (int m = 0; m < s.numMeasures(); ++m)
+            {
+                const auto& es = staff.measures[(size_t) m].layers[(size_t) l];
+                auto& out = table[st][(size_t) m][(size_t) l];
+                out.assign (es.size(), 0);
+                Tick t = s.measureStart (m);
+                for (size_t i = 0; i < es.size(); ++i)
+                {
+                    const auto& e = es[i];
+                    if (! e.rest)
+                    {
+                        const bool slurFirst = e.slurStart;
+                        if (e.slurStart) inSlur = true;
+                        const bool slurLast = inSlur && e.slurEnd;
+                        if (e.slurEnd) inSlur = false;
+                        int vel = levelAt (t);
+                        if (e.accent) vel += pb.accentBoost;
+                        if (slurFirst) vel += pb.slurStartVelocity;
+                        if (slurLast) vel += pb.slurEndVelocity;
+                        if (e.staccato) vel += pb.staccatoVelocity;
+                        if (e.velocity > 0) vel = e.velocity;
+                        out[i] = std::clamp (vel, 1, 127);
+                    }
+                    t += e.duration();
+                }
+            }
+        }
+    }
+    return table;
+}
+
 Sequence buildSequence (const Score& s)
 {
     Sequence seq;
     const auto order = playbackOrder (s);
     const auto& pb = s.playback;
+    const auto velocities = computeVelocities (s);
 
     std::vector<Pending> all;
     for (int st = 0; st < (int) s.staves.size(); ++st)
+    for (int layer = 0; layer < kLayers; ++layer)
     {
         const auto& staff = s.staves[st];
         const int channel = std::clamp (staff.midiChannel, 1, 16);
@@ -81,15 +148,18 @@ Sequence buildSequence (const Score& s)
         for (int mi : order)
         {
             Tick pos = t;
-            for (const auto& e : staff.measures[mi].entries)
+            const auto& es = staff.measures[mi].layers[layer];
+            for (size_t ei = 0; ei < es.size(); ++ei)
             {
+                const auto& e = es[ei];
+                const int entryVel = velocities[(size_t) st][(size_t) mi][(size_t) layer][ei];
                 const Tick d = e.duration();
                 if (e.grace)
                 {
                     for (const auto& n : e.notes)
                     {
                         const Tick gl = PPQ / 10;
-                        all.push_back ({ std::max<Tick> (0, pos - gl), gl, n.pitch.midi(), channel, pb.velocity,
+                        all.push_back ({ std::max<Tick> (0, pos - gl), gl, n.pitch.midi(), channel, entryVel,
                                          false, false, false, false, false });
                     }
                     continue;
@@ -100,7 +170,6 @@ Sequence buildSequence (const Score& s)
                     pos += d;
                     continue;
                 }
-                const bool slurFirst = e.slurStart;
                 if (e.slurStart) inSlur = true;
                 const bool slurLast = inSlur && e.slurEnd;
                 const bool slurred = inSlur && ! e.slurEnd;
@@ -124,12 +193,7 @@ Sequence buildSequence (const Score& s)
                     }
                     else
                     {
-                        int vel = pb.velocity;
-                        if (e.accent) vel += pb.accentBoost;
-                        if (slurFirst) vel += pb.slurStartVelocity;
-                        if (slurLast) vel += pb.slurEndVelocity;
-                        if (e.staccato) vel += pb.staccatoVelocity;
-                        all.push_back ({ pos, d, midi, channel, std::clamp (vel, 1, 127),
+                        all.push_back ({ pos, d, midi, channel, std::clamp (entryVel, 1, 127),
                                          e.staccato, e.tenuto, slurred, slurLast, false });
                         idx = all.size() - 1;
                     }

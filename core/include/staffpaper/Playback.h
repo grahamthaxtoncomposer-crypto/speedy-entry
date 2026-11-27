@@ -4,6 +4,7 @@
 
 #include "staffpaper/Score.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <vector>
@@ -28,6 +29,12 @@ struct Sequence
 
 // Measure indices in performance order (repeats and endings unrolled).
 std::vector<int> playbackOrder (const Score& s);
+
+// The velocity every entry plays at, indexed [staff][measure][layer][entry]
+// (rests get 0). Dynamics set fixed levels from where they are written; accents,
+// staccato and slurs adjust them; a hand-set velocity (Entry::velocity) wins.
+using VelocityTable = std::vector<std::vector<std::array<std::vector<int>, kLayers>>>;
+VelocityTable computeVelocities (const Score& s);
 
 // Flatten the score into notes: ties merged, articulations and slurs applied.
 Sequence buildSequence (const Score& s);

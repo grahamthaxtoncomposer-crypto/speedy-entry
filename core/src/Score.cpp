@@ -109,6 +109,21 @@ const char* barlineName (Barline b)
     }
 }
 
+const char* dynamicName (Dynamic d)
+{
+    static const char* names[] = { "pppp", "ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "ffff" };
+    const int i = (int) d;
+    return (i >= 0 && i < (int) Dynamic::Count) ? names[i] : "?";
+}
+
+bool StaffMeasure::multiLayer() const
+{
+    int used = 0;
+    for (const auto& l : layers)
+        if (! l.empty()) ++used;
+    return used > 1;
+}
+
 Tick baseTicksForValue (int value)
 {
     value = std::clamp (value, 1, 8);
@@ -223,20 +238,74 @@ Clef Score::clefAt (int staff, int measure) const
     {
         if (st.measures[i].clefChange) c = *st.measures[i].clefChange;
         if (i < measure)
-            for (const auto& e : st.measures[i].entries)
-                if (e.clefBefore) c = *e.clefBefore;
+        {
+            // the last mid-measure change (by time, in any layer) carries on
+            Tick best = -1;
+            for (int l = 0; l < kLayers; ++l)
+            {
+                Tick t = 0;
+                for (const auto& e : st.measures[i].layers[l])
+                {
+                    if (e.clefBefore && t >= best) { best = t; c = *e.clefBefore; }
+                    t += e.duration();
+                }
+            }
+        }
     }
     return c;
 }
 
-Clef Score::clefAtEntry (int staff, int measure, int entry) const
+Clef Score::clefAtTick (int staff, int measure, Tick tick) const
 {
     Clef c = clefAt (staff, measure);
     if (staff < 0 || staff >= (int) staves.size() || measure < 0 || measure >= numMeasures()) return c;
-    const auto& es = staves[staff].measures[measure].entries;
-    for (int i = 0; i <= entry && i < (int) es.size(); ++i)
-        if (es[i].clefBefore) c = *es[i].clefBefore;
+    Tick best = -1;
+    for (int l = 0; l < kLayers; ++l)
+    {
+        Tick t = 0;
+        for (const auto& e : staves[staff].measures[measure].layers[l])
+        {
+            if (t > tick) break;
+            if (e.clefBefore && t >= best) { best = t; c = *e.clefBefore; }
+            t += e.duration();
+        }
+    }
     return c;
+}
+
+Clef Score::clefAtEntry (int staff, int measure, int entry, int layer) const
+{
+    if (staff < 0 || staff >= (int) staves.size() || measure < 0 || measure >= numMeasures()) return clefAt (staff, measure);
+    const auto& es = staves[staff].measures[measure].layers[layer];
+    if (layer == 0)
+    {
+        // layer 1 owns most clef changes: honour entry order (grace notes share a time)
+        Clef c = clefAtTick (staff, measure, onsetOf (staff, measure, 0, entry) - 1);
+        for (int i = 0; i <= entry && i < (int) es.size(); ++i)
+            if (es[i].clefBefore) c = *es[i].clefBefore;
+        return c;
+    }
+    return clefAtTick (staff, measure, onsetOf (staff, measure, layer, entry));
+}
+
+Tick Score::onsetOf (int staff, int measure, int layer, int entry) const
+{
+    Tick t = 0;
+    const auto& es = staves[staff].measures[measure].layers[layer];
+    for (int i = 0; i < entry && i < (int) es.size(); ++i) t += es[i].duration();
+    return t;
+}
+
+int Score::measureAtTick (Tick t) const
+{
+    Tick start = 0;
+    for (int m = 0; m < numMeasures(); ++m)
+    {
+        const Tick cap = measureCapacity (m);
+        if (t < start + cap) return m;
+        start += cap;
+    }
+    return numMeasures() - 1;
 }
 
 Tick Score::measureCapacity (int measure) const
@@ -254,17 +323,17 @@ Tick Score::measureStart (int measure) const
     return t;
 }
 
-Tick Score::contentLength (int staff, int measure) const
+Tick Score::contentLength (int staff, int measure, int layer) const
 {
     Tick t = 0;
-    for (const auto& e : staves[staff].measures[measure].entries)
+    for (const auto& e : staves[staff].measures[measure].layers[layer])
         t += e.duration();
     return t;
 }
 
-int Score::contextAlter (int staff, int measure, int entryIndex, int dia) const
+int Score::contextAlter (int staff, int measure, int entryIndex, int dia, int layer) const
 {
-    const auto& entries = staves[staff].measures[measure].entries;
+    const auto& entries = staves[staff].measures[measure].layers[layer];
     for (int i = std::min (entryIndex, (int) entries.size()) - 1; i >= 0; --i)
     {
         const auto& e = entries[i];
@@ -275,9 +344,9 @@ int Score::contextAlter (int staff, int measure, int entryIndex, int dia) const
     return keyAlterForStep (keyAt (measure), ((dia % 7) + 7) % 7);
 }
 
-std::optional<int> Score::displayedAccidental (int staff, int measure, int entryIndex, int noteIndex) const
+std::optional<int> Score::displayedAccidental (int staff, int measure, int entryIndex, int noteIndex, int layer) const
 {
-    const auto& e = staves[staff].measures[measure].entries[entryIndex];
+    const auto& e = staves[staff].measures[measure].layers[layer][entryIndex];
     if (e.rest || noteIndex < 0 || noteIndex >= (int) e.notes.size()) return std::nullopt;
     const auto& n = e.notes[noteIndex];
     if (n.accidental == AccidentalMode::Hide) return std::nullopt;
@@ -286,11 +355,11 @@ std::optional<int> Score::displayedAccidental (int staff, int measure, int entry
     // A note tied from the previous entry does not repeat its accidental.
     if (entryIndex > 0)
     {
-        const auto& prev = staves[staff].measures[measure].entries[entryIndex - 1];
+        const auto& prev = staves[staff].measures[measure].layers[layer][entryIndex - 1];
         for (const auto& pn : prev.notes)
             if (pn.tieToNext && pn.pitch == n.pitch) return std::nullopt;
     }
-    if (contextAlter (staff, measure, entryIndex, n.pitch.dia) != n.pitch.alter)
+    if (contextAlter (staff, measure, entryIndex, n.pitch.dia, layer) != n.pitch.alter)
         return n.pitch.alter;
     return std::nullopt;
 }

@@ -2,6 +2,7 @@
 #include "staffpaper/Editor.h"
 #include "staffpaper/KeyMap.h"
 #include "staffpaper/Layout.h"
+#include "staffpaper/MusicXml.h"
 #include "staffpaper/Playback.h"
 #include "staffpaper/Project.h"
 
@@ -46,7 +47,7 @@ static void testKeyMap()
     KeyStroke k;
     CHECK (parseKey ("5", k));
     CHECK (km.lookup (k).command == Command::EnterValue && km.lookup (k).arg == 5);
-    CHECK (parseKey ("ctrl+3", k) && km.lookup (k).command == Command::StartTuplet);
+    CHECK (parseKey ("alt+3", k) && km.lookup (k).command == Command::StartTuplet);
     CHECK (parseKey ("plus", k) && km.lookup (k).command == Command::RaiseHalfStep);
     CHECK (parseKey ("equals", k) && km.lookup (k).command == Command::TieNext);
     CHECK (parseKey ("shift+up", k) && km.lookup (k).command == Command::StaffUp);
@@ -65,15 +66,15 @@ static void testEntryAndFill()
     Editor ed (s);
     ed.setCursor ({ 0, 0, 0, 30 }); // E4
     for (int i = 0; i < 4; ++i) ed.perform (Command::EnterValue, 5);
-    CHECK (s.staves[0].measures[0].entries.size() == 4);
+    CHECK (s.staves[0].measures[0].layers[0].size() == 4);
     CHECK (ed.cursor().measure == 1); // jumped to the next measure
     CHECK (ed.cursor().entry == 0);
-    CHECK (s.staves[0].measures[0].entries[0].notes[0].pitch.midi() == 64);
+    CHECK (s.staves[0].measures[0].layers[0][0].notes[0].pitch.midi() == 64);
 
     // the dot applies to the note just entered
     ed.perform (Command::EnterValue, 5);
     ed.perform (Command::Dot);
-    CHECK (s.staves[0].measures[1].entries[0].dots == 1);
+    CHECK (s.staves[0].measures[1].layers[0][0].dots == 1);
     CHECK (s.contentLength (0, 1) == PPQ * 3 / 2);
 
     // a half note now overflows: 1.5 + 2 = 3.5, fits, then a half more overflows by a quarter
@@ -82,11 +83,11 @@ static void testEntryAndFill()
     CHECK (s.contentLength (0, 1) == 4 * PPQ);
     CHECK (s.numMeasures() >= 3);
     // the split half note becomes eighth tied over the bar? 4 - 3.5 = half a beat stays
-    const auto& m1 = s.staves[0].measures[1].entries;
+    const auto& m1 = s.staves[0].measures[1].layers[0];
     CHECK (m1.back().notes[0].tieToNext);
     CHECK (s.contentLength (0, 2) == PPQ * 3 / 2);
     CHECK (ed.cursor().measure == 2);
-    CHECK (ed.cursor().entry == (int) s.staves[0].measures[2].entries.size());
+    CHECK (ed.cursor().entry == (int) s.staves[0].measures[2].layers[0].size());
 
     // undo restores
     ed.perform (Command::Undo);
@@ -100,15 +101,15 @@ static void testAccidentals()
     ed.setCursor ({ 0, 0, 0, 31 }); // F4
     ed.perform (Command::EnterValue, 5);
     ed.perform (Command::RaiseHalfStep);
-    CHECK (s.staves[0].measures[0].entries[0].notes[0].pitch.alter == 1);
+    CHECK (s.staves[0].measures[0].layers[0][0].notes[0].pitch.alter == 1);
     CHECK (s.displayedAccidental (0, 0, 0, 0).value_or (99) == 1);
     // next F carries the sharp and shows no accidental
     ed.perform (Command::EnterValue, 5);
-    CHECK (s.staves[0].measures[0].entries[1].notes[0].pitch.alter == 1);
+    CHECK (s.staves[0].measures[0].layers[0][1].notes[0].pitch.alter == 1);
     CHECK (! s.displayedAccidental (0, 0, 1, 0).has_value());
     // enharmonic: F# -> Gb
     ed.perform (Command::Enharmonic);
-    const auto p = s.staves[0].measures[0].entries[1].notes[0].pitch;
+    const auto p = s.staves[0].measures[0].layers[0][1].notes[0].pitch;
     CHECK (p.midi() == 66);
     CHECK (p.dia == 32 && p.alter == -1);
 }
@@ -122,7 +123,7 @@ static void testChordsRestsTies()
     ed.perform (Command::CursorUp);
     ed.perform (Command::CursorUp);
     ed.perform (Command::AddChordNote);
-    CHECK (s.staves[0].measures[0].entries[0].notes.size() == 2);
+    CHECK (s.staves[0].measures[0].layers[0][0].notes.size() == 2);
     ed.perform (Command::TieNext);
     ed.perform (Command::CursorDown);
     ed.perform (Command::CursorDown);
@@ -142,7 +143,7 @@ static void testChordsRestsTies()
     CHECK (eLen == (int) std::llround (4 * PPQ * s.playback.normalLength));
 
     ed.perform (Command::ToggleRest);
-    CHECK (s.staves[0].measures[0].entries[1].rest);
+    CHECK (s.staves[0].measures[0].layers[0][1].rest);
 }
 
 static void testRepeats()
@@ -240,7 +241,7 @@ static void testSerialization()
     ed.perform (Command::Accent);
     ed.perform (Command::RaiseHalfStep);
     p.clips[0].score.measures[0].repeatStart = true;
-    p.clips[0].score.staves[0].measures[0].entries[0].clefBefore = Clef::Alto;
+    p.clips[0].score.staves[0].measures[0].layers[0][0].clefBefore = Clef::Alto;
     p.clips[0].name = "Theme \"A\"";
     Clip c2;
     c2.name = "Clip 2";
@@ -254,7 +255,7 @@ static void testSerialization()
     CHECK (q.clips.size() == 2);
     CHECK (q.clips[0].name == "Theme \"A\"");
     CHECK (q.clips[1].score.isGrandStaff());
-    const auto& e = q.clips[0].score.staves[0].measures[0].entries[0];
+    const auto& e = q.clips[0].score.staves[0].measures[0].layers[0][0];
     CHECK (e.accent && e.notes[0].pitch.alter == 1 && e.clefBefore == Clef::Alto);
     CHECK (q.toText() == text);
     CHECK (! Project::fromText ("garbage", q, &err));
@@ -275,6 +276,145 @@ static void testBeams()
     CHECK (groups[0].size() == 4);
 }
 
+static void testFinaleMacKeys()
+{
+    const auto km = KeyMap::defaults();
+    KeyStroke k;
+    CHECK (parseKey ("alt+3", k) && km.lookup (k).command == Command::StartTuplet && km.lookup (k).arg == 3);
+    CHECK (parseKey ("alt+1", k) && km.lookup (k).command == Command::TupletDialog);
+    CHECK (parseKey ("alt+shift+5", k) && km.lookup (k).command == Command::EnterRestValue && km.lookup (k).arg == 5);
+    CHECK (parseKey ("alt+9", k) && km.lookup (k).command == Command::EnharmonicMeasure);
+    CHECK (parseKey ("alt+l", k) && km.lookup (k).command == Command::AutoStem);
+    CHECK (parseKey ("alt+equals", k) && km.lookup (k).command == Command::TiePrevious);
+    CHECK (parseKey ("'", k) && km.lookup (k).command == Command::ToggleVoice);
+    CHECK (parseKey ("ctrl+alt+3", k) && km.lookup (k).command == Command::SetLayer && km.lookup (k).arg == 3);
+    CHECK (parseKey ("(", k) && km.lookup (k).command == Command::SlurStart);
+    CHECK (parseKey ("esc", k) && km.lookup (k).command == Command::ToggleFrame);
+    CHECK (parseKey ("ctrl+v", k) && km.lookup (k).command == Command::Paste);
+}
+
+static void testLayers()
+{
+    Score s = Score::makeEmpty (2);
+    Editor ed (s);
+    ed.setCursor ({ 0, 0, 0, 35 });
+    for (int i = 0; i < 4; ++i) ed.perform (Command::EnterValue, 5);
+    CHECK (ed.cursor().measure == 1);
+    ed.setCursor ({ 0, 0, 0, 30 });
+    ed.perform (Command::ToggleVoice);
+    CHECK (ed.cursor().layer == 1);
+    ed.perform (Command::EnterValue, 6);
+    ed.perform (Command::EnterValue, 6);
+    CHECK (s.staves[0].measures[0].layers[1].size() == 2);
+    CHECK (s.staves[0].measures[0].layers[0].size() == 4);
+    CHECK (layerStemRule (s.staves[0].measures[0], 0) == 1);
+    CHECK (layerStemRule (s.staves[0].measures[0], 1) == -1);
+    // both layers play
+    const auto seq = buildSequence (s);
+    CHECK (seq.events.size() == 6);
+    // the frame: closed, entry keys do nothing
+    ed.perform (Command::ToggleFrame);
+    CHECK (! ed.frameActive());
+    CHECK (! ed.perform (Command::EnterValue, 5));
+    ed.perform (Command::ToggleFrame);
+    CHECK (ed.frameActive());
+}
+
+static void testCopyPaste()
+{
+    Score s = Score::makeEmpty (4);
+    Editor ed (s);
+    ed.setCursor ({ 0, 0, 0, 30 });
+    for (int i = 0; i < 4; ++i)
+    {
+        ed.perform (Command::EnterValue, 5);
+        ed.perform (Command::CursorUp);
+    }
+    ed.setCursor ({ 0, 0, 0, 30 });
+    ed.perform (Command::SelectMeasure);
+    CHECK (ed.selection().active);
+    ed.perform (Command::Copy);
+    CHECK (! Editor::clipboard().empty());
+    ed.setCursor ({ 0, 2, 0, 30 });
+    ed.perform (Command::Paste);
+    CHECK (s.staves[0].measures[2].layers[0].size() == 4);
+    CHECK (s.staves[0].measures[2].layers[0][3].notes[0].pitch.dia == 33);
+    CHECK (s.contentLength (0, 3) == 0);
+    // paste over existing music replaces it
+    ed.setCursor ({ 0, 0, 2, 30 });
+    ed.perform (Command::Paste);
+    CHECK (s.contentLength (0, 0) == 4 * PPQ);
+    CHECK (s.staves[0].measures[0].layers[0][2].notes[0].pitch.dia == 30);
+    CHECK (s.staves[0].measures[1].layers[0].size() >= 2);
+    // clear leaves rests
+    ed.setCursor ({ 0, 2, 0, 30 });
+    ed.perform (Command::SelectMeasure);
+    ed.perform (Command::DeleteEntry);
+    CHECK (s.staves[0].measures[2].layers[0].size() == 4 && s.staves[0].measures[2].layers[0][0].rest);
+}
+
+static void testDynamics()
+{
+    Score s = Score::makeEmpty (2);
+    Editor ed (s);
+    ed.setCursor ({ 0, 0, 0, 30 });
+    ed.perform (Command::EnterValue, 5);
+    ed.perform (Command::SetDynamic, 3); // pp
+    ed.perform (Command::EnterValue, 5);
+    ed.perform (Command::EnterValue, 5);
+    ed.perform (Command::SetDynamic, 7); // f
+    ed.perform (Command::EnterValue, 5);
+    auto v = computeVelocities (s);
+    CHECK (v[0][0][0][0] == s.playback.dynamicVelocity[2]);
+    CHECK (v[0][0][0][1] == s.playback.dynamicVelocity[2]);
+    CHECK (v[0][0][0][2] == s.playback.dynamicVelocity[6]);
+    CHECK (v[0][0][0][3] == s.playback.dynamicVelocity[6]);
+    s.staves[0].measures[0].layers[0][1].velocity = 101;
+    v = computeVelocities (s);
+    CHECK (v[0][0][0][1] == 101);
+    const auto seq = buildSequence (s);
+    CHECK (seq.events[1].velocity == 101);
+}
+
+static void testLayerSerializationAndXml()
+{
+    Project p = Project::makeDefault();
+    auto& sc = p.clips[0].score;
+    sc.setGrandStaff (true);
+    Editor ed (sc);
+    ed.setCursor ({ 0, 0, 0, 30 });
+    ed.perform (Command::StartTuplet, 3);
+    for (int i = 0; i < 3; ++i) ed.perform (Command::EnterValue, 4);
+    ed.perform (Command::SetDynamic, 6);
+    ed.perform (Command::EnterValue, 6);
+    ed.perform (Command::SetLayer, 2);
+    ed.perform (Command::EnterValue, 7);
+    p.audition = false;
+    p.manualColour = 0xff123456;
+    Project q;
+    CHECK (Project::fromText (p.toText(), q));
+    CHECK (! q.audition && q.manualColour == 0xff123456u);
+    CHECK (q.clips[0].score.staves[0].measures[0].layers[1].size() == 1);
+    CHECK (q.clips[0].score.staves[0].measures[0].layers[0][2].dynamic == Dynamic::mf);
+    const auto xml = toMusicXml (sc, "Test", "test");
+    CHECK (xml.find ("<staves>2</staves>") != std::string::npos);
+    CHECK (xml.find ("<actual-notes>3</actual-notes>") != std::string::npos);
+    CHECK (xml.find ("<dynamics><mf/></dynamics>") != std::string::npos);
+    CHECK (xml.find ("<voice>2</voice>") != std::string::npos);
+    CHECK (xml.find ("<backup>") != std::string::npos);
+    // tags balance (cheap well-formedness check)
+    int open = 0;
+    for (size_t i = 0; i + 1 < xml.size(); ++i)
+        if (xml[i] == '<' && xml[i + 1] != '?' && xml[i + 1] != '!')
+        {
+            const auto close = xml.find ('>', i);
+            const bool selfClosing = xml[close - 1] == '/';
+            if (xml[i + 1] == '/') --open;
+            else if (! selfClosing) ++open;
+        }
+    CHECK (open == 0);
+}
+
 int main()
 {
     testPitch();
@@ -287,6 +427,11 @@ int main()
     testScheduler();
     testSerialization();
     testBeams();
+    testFinaleMacKeys();
+    testLayers();
+    testCopyPaste();
+    testDynamics();
+    testLayerSerializationAndXml();
     if (failures == 0) std::printf ("all core tests passed\n");
     return failures == 0 ? 0 : 1;
 }

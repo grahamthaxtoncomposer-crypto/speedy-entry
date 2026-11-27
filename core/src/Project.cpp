@@ -132,13 +132,16 @@ namespace
 
     void writeScore (Writer& w, const Score& s)
     {
-        w.tok ("score").num (2).nl();
+        w.tok ("score").num (3).nl();
         w.tok ("title").str (s.title).nl();
         w.tok ("meter").num (s.timeSig.num).num (s.timeSig.den).tok ("key").num (s.keyFifths).nl();
         const auto& pb = s.playback;
         w.tok ("playback").real (pb.normalLength).real (pb.staccatoLength).num (pb.staccatoVelocity)
             .real (pb.tenutoLength).real (pb.legatoOverlap).real (pb.slurEndLength)
             .num (pb.slurStartVelocity).num (pb.slurEndVelocity).num (pb.velocity).num (pb.accentBoost).nl();
+        w.tok ("dynamics");
+        for (int v : pb.dynamicVelocity) w.num (v);
+        w.nl();
         w.tok ("measures").num (s.numMeasures()).nl();
         for (const auto& m : s.measures)
         {
@@ -154,20 +157,25 @@ namespace
             w.tok ("staff").num ((int) st.clef).num (st.midiChannel).nl();
             for (const auto& sm : st.measures)
             {
-                w.tok ("sm").num (sm.clefChange ? (int) *sm.clefChange : -1).num ((long long) sm.entries.size()).nl();
-                for (const auto& e : sm.entries)
+                w.tok ("sm").num (sm.clefChange ? (int) *sm.clefChange : -1).num (kLayers).nl();
+                for (const auto& layer : sm.layers)
                 {
-                    unsigned flags = 0;
-                    int bit = 0;
-                    for (bool f : { e.tupletStart, e.rest, e.hidden, e.grace, e.flatBeam, e.staccato, e.tenuto, e.accent, e.slurStart, e.slurEnd })
-                        flags |= (f ? 1u : 0u) << bit++;
-                    w.tok ("e").num (e.value).num (e.dots).num (e.tuplet.actual).num (e.tuplet.normal)
-                        .num (flags).num ((int) e.stem).num ((int) e.beam)
-                        .num (e.clefBefore ? (int) *e.clefBefore : -1)
-                        .num ((long long) e.notes.size());
-                    for (const auto& n : e.notes)
-                        w.num (n.pitch.dia).num (n.pitch.alter).num (n.tieToNext).num ((int) n.accidental).num (n.parentheses);
-                    w.nl();
+                    w.tok ("layer").num ((long long) layer.size()).nl();
+                    for (const auto& e : layer)
+                    {
+                        unsigned flags = 0;
+                        int bit = 0;
+                        for (bool f : { e.tupletStart, e.rest, e.hidden, e.grace, e.flatBeam, e.staccato, e.tenuto, e.accent, e.slurStart, e.slurEnd, e.graceSlash })
+                            flags |= (f ? 1u : 0u) << bit++;
+                        w.tok ("e").num (e.value).num (e.dots).num (e.tuplet.actual).num (e.tuplet.normal)
+                            .num (flags).num ((int) e.stem).num ((int) e.beam)
+                            .num (e.clefBefore ? (int) *e.clefBefore : -1)
+                            .num (e.dynamic ? (int) *e.dynamic : -1).num (e.velocity)
+                            .num ((long long) e.notes.size());
+                        for (const auto& n : e.notes)
+                            w.num (n.pitch.dia).num (n.pitch.alter).num (n.tieToNext).num ((int) n.accidental).num (n.parentheses);
+                        w.nl();
+                    }
                 }
             }
         }
@@ -179,7 +187,7 @@ namespace
         s = Score {};
         r.expect ("score");
         const auto version = r.num();
-        if (version < 1 || version > 2) r.fail ("unsupported score version");
+        if (version < 1 || version > 3) r.fail ("unsupported score version");
         r.expect ("title");
         s.title = r.str();
         r.expect ("meter");
@@ -199,6 +207,11 @@ namespace
         pb.slurEndVelocity = (int) r.num();
         pb.velocity = (int) r.num();
         pb.accentBoost = (int) r.num();
+        if (version >= 3)
+        {
+            r.expect ("dynamics");
+            for (auto& v : pb.dynamicVelocity) v = std::clamp ((int) r.num(), 1, 127);
+        }
         r.expect ("measures");
         const auto nm = r.num();
         if (nm < 1 || nm > 100000) r.fail ("bad measure count");
@@ -234,35 +247,46 @@ namespace
                 StaffMeasure sm;
                 const auto c = r.num();
                 if (c >= 0) sm.clefChange = clampEnum (c, Clef::Count);
-                const auto ne = r.num();
-                for (long long ei = 0; ei < ne && r.ok; ++ei)
+                const auto nl = (version >= 3) ? r.num() : 1;
+                for (long long li = 0; li < nl && r.ok; ++li)
                 {
-                    r.expect ("e");
-                    Entry e;
-                    e.value = (int) r.num();
-                    e.dots = (int) r.num();
-                    e.tuplet.actual = (int) r.num();
-                    e.tuplet.normal = (int) r.num();
-                    const auto flags = (unsigned) r.num();
-                    int bit = 0;
-                    for (bool* f : { &e.tupletStart, &e.rest, &e.hidden, &e.grace, &e.flatBeam, &e.staccato, &e.tenuto, &e.accent, &e.slurStart, &e.slurEnd })
-                        *f = (flags >> bit++) & 1u;
-                    e.stem = (StemDir) std::clamp ((int) r.num(), 0, 2);
-                    e.beam = (BeamMode) std::clamp ((int) r.num(), 0, 2);
-                    const auto cb = r.num();
-                    if (cb >= 0) e.clefBefore = clampEnum (cb, Clef::Count);
-                    const auto nn = r.num();
-                    for (long long k = 0; k < nn && r.ok; ++k)
+                    if (version >= 3) r.expect ("layer");
+                    const auto ne = r.num();
+                    for (long long ei = 0; ei < ne && r.ok; ++ei)
                     {
-                        Note n;
-                        n.pitch.dia = (int) r.num();
-                        n.pitch.alter = (int) r.num();
-                        n.tieToNext = r.num() != 0;
-                        n.accidental = (AccidentalMode) std::clamp ((int) r.num(), 0, 2);
-                        n.parentheses = r.num() != 0;
-                        e.notes.push_back (n);
+                        r.expect ("e");
+                        Entry e;
+                        e.value = std::clamp ((int) r.num(), 1, 8);
+                        e.dots = std::clamp ((int) r.num(), 0, 3);
+                        e.tuplet.actual = (int) r.num();
+                        e.tuplet.normal = (int) r.num();
+                        const auto flags = (unsigned) r.num();
+                        int bit = 0;
+                        for (bool* f : { &e.tupletStart, &e.rest, &e.hidden, &e.grace, &e.flatBeam, &e.staccato, &e.tenuto, &e.accent, &e.slurStart, &e.slurEnd, &e.graceSlash })
+                            *f = (flags >> bit++) & 1u;
+                        e.stem = (StemDir) std::clamp ((int) r.num(), 0, 2);
+                        e.beam = (BeamMode) std::clamp ((int) r.num(), 0, 2);
+                        const auto cb = r.num();
+                        if (cb >= 0) e.clefBefore = clampEnum (cb, Clef::Count);
+                        if (version >= 3)
+                        {
+                            const auto dyn = r.num();
+                            if (dyn >= 0) e.dynamic = clampEnum (dyn, Dynamic::Count);
+                            e.velocity = std::clamp ((int) r.num(), 0, 127);
+                        }
+                        const auto nn = r.num();
+                        for (long long k = 0; k < nn && r.ok; ++k)
+                        {
+                            Note n;
+                            n.pitch.dia = (int) r.num();
+                            n.pitch.alter = (int) r.num();
+                            n.tieToNext = r.num() != 0;
+                            n.accidental = (AccidentalMode) std::clamp ((int) r.num(), 0, 2);
+                            n.parentheses = r.num() != 0;
+                            e.notes.push_back (n);
+                        }
+                        if (li < kLayers) sm.layers[(size_t) li].push_back (e);
                     }
-                    sm.entries.push_back (e);
                 }
                 st.measures.push_back (sm);
             }
@@ -296,9 +320,10 @@ bool scoreFromText (const std::string& text, Score& out, std::string* error)
 std::string Project::toText() const
 {
     Writer w;
-    w.tok ("staffpaper-project").num (1).nl();
+    w.tok ("staffpaper-project").num (2).nl();
     w.tok ("settings").num (selectedClip).num (songClip).num ((int) quantize).num (followHostTempo)
         .num (followHostMeter).real (offsetBars).num (midiThru).nl();
+    w.tok ("settings2").num (audition).num (useTrackColour).num (manualColour).nl();
     w.tok ("clips").num ((long long) clips.size()).nl();
     for (const auto& c : clips)
     {
@@ -313,7 +338,8 @@ bool Project::fromText (const std::string& text, Project& out, std::string* erro
     Reader r (text);
     Project p;
     r.expect ("staffpaper-project");
-    if (r.num() != 1) r.fail ("unsupported project version");
+    const auto pv = r.num();
+    if (pv < 1 || pv > 2) r.fail ("unsupported project version");
     r.expect ("settings");
     p.selectedClip = (int) r.num();
     p.songClip = (int) r.num();
@@ -322,6 +348,13 @@ bool Project::fromText (const std::string& text, Project& out, std::string* erro
     p.followHostMeter = r.num() != 0;
     p.offsetBars = r.real();
     p.midiThru = r.num() != 0;
+    if (pv >= 2)
+    {
+        r.expect ("settings2");
+        p.audition = r.num() != 0;
+        p.useTrackColour = r.num() != 0;
+        p.manualColour = (uint32_t) r.num();
+    }
     r.expect ("clips");
     const auto nc = r.num();
     if (nc < 1 || nc > 1024) r.fail ("bad clip count");

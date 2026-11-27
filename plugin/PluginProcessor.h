@@ -44,9 +44,10 @@ public:
     staffpaper::Project project; // edited on the message thread only
     staffpaper::KeyMap keyMap;
     juce::String keyMapProblems;
-    bool darkMode = false;
-    bool pageView = false;
+    bool darkMode = true;
     float zoom = 9.0f;
+    int tool = 0;      // 0 = Speedy entry, 1 = select
+    int grid = 0;      // selection grid, see StaffView::setGrid
 
     void projectChanged();     // rebuild playback after an edit
     void reloadKeyMap();
@@ -76,6 +77,15 @@ public:
 
     // MIDI-keyboard entry: notes currently held on the input
     std::vector<int> heldNotes() const;
+
+    // Play notes once, short (message thread -> audio thread).
+    void audition (const std::vector<int>& notes, int channel);
+
+    // Bitwig's track colour (ARGB), 0 when the host has not told us.
+    std::atomic<uint32_t> trackColour { 0 };
+    juce::String trackName;
+    std::function<void()> onTrackInfo; // message thread
+    void updateTrackProperties (const TrackProperties&) override;
 
     // Called on the message thread when the host loaded a new state.
     std::function<void()> onProjectReplaced;
@@ -111,6 +121,15 @@ private:
     double ownBeat = 0;
 
     std::array<std::atomic<uint32_t>, 4> held {};
+
+    // audition notes: a small lock-free queue, then note-offs counted down in samples
+    struct AuditionNote { int note = 0, channel = 1; };
+    static constexpr int kAuditionQueue = 128;
+    juce::AbstractFifo auditionFifo { kAuditionQueue };
+    std::array<AuditionNote, kAuditionQueue> auditionQueue {};
+    std::array<AuditionNote, 32> auditionSounding {};
+    int auditionCount = 0;
+    int auditionSamplesLeft = 0;
     std::atomic<bool> midiThru { false };
 
     juce::CriticalSection stateLock;

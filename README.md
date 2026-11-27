@@ -10,30 +10,36 @@ is an independent re-implementation and contains no code, artwork or fonts from
 that product. Music symbols use the free Bravura font (SIL Open Font Licence,
 see `resources/fonts/OFL.txt`).
 
-## What works in this first version
+## What it does
 
 - Single staff or grand staff, any clef on any staff, clef changes at a measure
-  or before any note
-- Speedy-style entry: number keys 1-8 (64th to double whole), arrows for pitch,
-  `.` dot, `+`/`-` half steps, `9` respell, `*` show/hide accidental, `=`/`T` tie,
-  `Enter` add chord note, `Backspace` note/rest, `Delete`, `/` or `B` beam
-  break/join, `L` stem flip, `;` grace note, `[` `]` measures, Shift+Up/Down
-  staff, Cmd+3 triplet, Cmd+1 any tuplet ratio, Cmd+Z / Cmd+Y undo/redo
-- Measures fill like the classic entry frame: an overfull note is split and
-  tied across the barline and the cursor jumps to the next measure
-- Staccato (Option+S), tenuto (Option+T), accent (Option+A), slurs
-  (Option+9 start, Option+0 end) — all change playback, Classical-style
-  defaults, adjustable in Settings
-- Right-click a measure (or Option+M): time and key signatures, clefs,
-  barlines, repeats, 1st/2nd endings, pickup measure, insert/delete measures,
-  grand staff, MIDI channel per staff
-- Scroll view and page view, zoom, light and dark mode
-- Plays in sync with Bitwig (tempo, position, loop), or with its own
-  play / stop / rewind and tempo when sync is off
-- Clips view: a launcher column with launch quantize, loop or one-shot clips,
-  a "song" clip that follows Bitwig's timeline, and drag-out of any clip as a
-  MIDI file onto a Bitwig track
-- **Keys** button lists every command; the key map is a text file you can edit
+  or before any note. Staves move apart to make room for very high or low notes
+  when you leave the entry frame.
+- Speedy-style entry with the Mac keys: number keys 1-8 (64th to double whole),
+  arrows for pitch, `.` dot, `+`/`-` half steps, `9` respell, `*` accidental,
+  `=`/`T` tie, Option+number tuplets (Option+1 any ratio), Option+Shift+number
+  rests, Enter chord note, `;` grace, `` ` `` slashed grace, `/` beams, `L` stem,
+  Shift+Up/Down staff, `[` `]` measures, Esc leaves and re-enters the frame,
+  Shift+I insert mode
+- Four layers (voices): `'` switches layer 1/2, Cmd+Option+1-4, or the 1-4
+  buttons. Other layers are greyed while you type.
+- Speedy and Select tools. Select by dragging (snaps to the grid: free, 128th
+  to double whole, or whole measures), Shift+arrows, Cmd+A. Cmd+C / Cmd+X /
+  Cmd+V copy, cut and paste, also between clips.
+- Dynamics pppp to ffff (Option+D or the measure menu), each a fixed velocity
+- Velocity lane under the staff, like Bitwig's: drag dots to change velocity;
+  selecting notes selects their dots
+- Staccato, tenuto, accent, slurs (`(` and `)`), all change playback,
+  Classical-style defaults, adjustable in Settings
+- Hear notes: each note plays once, short, as you enter it
+- Clips in a left-to-right strip like Bitwig's launcher, a song clip that
+  follows Bitwig's timeline, drag-out as MIDI
+- Tempo and meter follow Bitwig, each switchable; own transport and BPM when
+  the tempo is not synced
+- Takes the Bitwig track's colour (or your own pick); light and dark modes
+- Export MusicXML (.musicxml or compressed .mxl)
+- **Commands** button (Cmd+K) lists every command; the key map is a text file
+  you can edit
 
 The full key map is in `core/src/KeyMap.cpp` (`KeyMap::defaultText`).
 
@@ -56,7 +62,7 @@ The plugin's name is set once, in `PLUGIN_DISPLAY_NAME` in `CMakeLists.txt`.
 ## Layout
 
 - `core/` — notation model, entry editor, key map, playback scheduler,
-  save/load. No JUCE; unit tested in `tests/`.
+  save/load, MusicXML export. No JUCE; unit tested in `tests/`.
 - `plugin/` — JUCE plugin: processor (MIDI out, transport sync, launcher),
   staff view, clip view, editor window.
 - `tools/RenderCheck.cpp` — draws a sample score to PNG for checking notation

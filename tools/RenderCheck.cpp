@@ -53,7 +53,27 @@ int main (int argc, char** argv)
         ed.perform (Command::EnterValue, 4);
         ed.perform (Command::CursorUp);
     }
+    // a second layer in measure 6 and a few dynamics
+    ed.setCursor ({ 0, 5, 0, 30 });
+    ed.perform (Command::EnterValue, 6);
+    ed.perform (Command::SetDynamic, 3);
+    ed.perform (Command::EnterValue, 6);
+    ed.perform (Command::SetDynamic, 8);
+    ed.setCursor ({ 0, 5, 0, 35, 1 });
+    for (int i = 0; i < 4; ++i) { ed.perform (Command::EnterValue, 5); ed.perform (Command::CursorDown); }
+    ed.setCursor ({ 0, 0, 0, 33 });
+    ed.perform (Command::SetDynamic, 6);
+    // very high notes on the upper staff, very low on the lower: the staves make room
+    score.appendMeasure();
+    const int hm = score.numMeasures() - 1;
+    score.staves[0].measures[(size_t) hm].clefChange = Clef::Treble;
+    ed.setCursor ({ 0, hm, 0, 47 });
+    ed.perform (Command::EnterValue, 6);
+    ed.setCursor ({ 1, hm, 0, 8 });
+    ed.perform (Command::EnterValue, 6);
     ed.setCursor ({ 0, 1, 1, 35 });
+    ed.setSelection ({ true, 0, 0, score.measureStart (2), score.measureStart (3) });
+    score.staves[0].measures[0].layers[0][2].velocity = 120;
 
     StaffView view;
     view.setScore (&score, &ed);
@@ -68,15 +88,18 @@ int main (int argc, char** argv)
         std::printf ("wrote %s\n", f.getFullPathName().toRawUTF8());
     };
 
-    shoot ("scroll-light.png", 1600, view.preferredHeight());
-    view.setDark (true);
-    shoot ("scroll-dark.png", 1600, view.preferredHeight());
-    view.setDark (false);
-    view.setPageView (true);
-    shoot ("page-light.png", 900, 700);
+    const auto lime = juce::Colour (0xffccff66);
+    view.setTheme (StaffView::Theme::light (lime));
+    shoot ("scroll-light.png", 1800, 520);
+    view.setTheme (StaffView::Theme::dark (lime));
+    shoot ("scroll-dark.png", 1800, 520);
+    view.setTheme (StaffView::Theme::dark (juce::Colour (0xffd9534f))); // a Bitwig track colour
+    ed.setFrameActive (false);
+    shoot ("frame-closed-dark.png", 1800, 520);
+    ed.setFrameActive (true);
+    view.setTheme (StaffView::Theme::light (lime));
     view.setStaffSpace (14.0f);
-    view.setPageView (false);
-    shoot ("zoomed.png", 1400, view.preferredHeight());
+    shoot ("zoomed.png", 1600, 700);
 
     // key translation sanity checks
     int bad = 0;
@@ -93,5 +116,7 @@ int main (int argc, char** argv)
     expect (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys::shiftModifier, 0), "shift+up");
     expect (juce::KeyPress ('s', juce::ModifierKeys::altModifier, 0x00df), "alt+s");
     expect (juce::KeyPress ('5', juce::ModifierKeys::shiftModifier, '%'), "%");
+    expect (juce::KeyPress ('\'', 0, '\''), "'");
+    expect (juce::KeyPress ('3', juce::ModifierKeys::altModifier, 0x00b3), "alt+3");
     return bad == 0 ? 0 : 1;
 }

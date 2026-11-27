@@ -22,7 +22,8 @@ add_library(staffpaper_core STATIC
     core/src/KeyMap.cpp
     core/src/Editor.cpp
     core/src/Playback.cpp
-    core/src/Project.cpp)
+    core/src/Project.cpp
+    core/src/MusicXml.cpp)
 target_include_directories(staffpaper_core PUBLIC core/include)
 if(MSVC)
     target_compile_options(staffpaper_core PRIVATE /W4 /utf-8)
@@ -77,6 +78,7 @@ if(STAFFPAPER_BUILD_PLUGIN)
         plugin/PluginEditor.cpp
         plugin/StaffView.cpp
         plugin/ClipView.cpp
+        plugin/HouseLook.cpp
         plugin/Glyphs.cpp)
     target_include_directories(StaffPaper PRIVATE plugin)
     target_compile_definitions(StaffPaper PUBLIC

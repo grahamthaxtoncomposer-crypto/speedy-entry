@@ -24,7 +24,7 @@ const char* launchQuantizeName (LaunchQuantize);
 struct Clip
 {
     std::string name = "Clip";
-    uint32_t colour = 0xff5b8def;
+    uint32_t colour = 0; // 0 = the track's colour
     bool loop = true;
     Score score;
 };
@@ -39,6 +39,9 @@ struct Project
     bool followHostMeter = true;
     double offsetBars = 0;   // song clip: where bar 1 of the score sits in Bitwig (in bars)
     bool midiThru = false;   // pass incoming MIDI to the instrument
+    bool audition = true;    // play each note once as it is entered
+    bool useTrackColour = true;        // take the colour of the Bitwig track
+    uint32_t manualColour = 0xffccff66; // used when useTrackColour is off (or the host gives none)
 
     static Project makeDefault();
     Clip& current() { return clips[(size_t) selectedClip]; }

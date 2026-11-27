@@ -7,6 +7,7 @@
 #include "staffpaper/KeyMap.h"
 #include "staffpaper/Score.h"
 
+#include <array>
 #include <functional>
 #include <string>
 #include <vector>
@@ -20,6 +21,25 @@ struct Cursor
     int measure = 0;
     int entry = 0;   // index of the entry under the insertion bar; == size() means the empty slot at the end
     int dia = 34;    // crossbar pitch (diatonic number), defaults to B4
+    int layer = 0;   // 0..kLayers-1
+};
+
+// A selected stretch of music: whole staves, from one written time to another.
+struct Selection
+{
+    bool active = false;
+    int staffFrom = 0, staffTo = 0; // inclusive
+    Tick start = 0, end = 0;        // written ticks from the start of the score
+
+    bool contains (int staff, Tick t) const { return active && staff >= staffFrom && staff <= staffTo && t >= start && t < end; }
+};
+
+// Copied music: for each staff, every layer as a run of entries starting at the copy start.
+struct Clipboard
+{
+    Tick length = 0;
+    std::vector<std::array<std::vector<Entry>, kLayers>> staves;
+    bool empty() const { return staves.empty(); }
 };
 
 class Editor
@@ -37,8 +57,25 @@ public:
     bool midiEntry = false;
 
     const Cursor& cursor() const { return cur; }
-    void setCursor (Cursor c);
+    void setCursor (Cursor c); // also opens the entry frame there
+
+    // The entry frame (the enlarged measure). When it is closed, entry keys do nothing.
+    bool frameActive() const { return frame; }
+    void setFrameActive (bool on);
+
+    const Selection& selection() const { return sel; }
+    void setSelection (const Selection& s) { sel = s; if (onChange) onChange(); }
+    void clearSelection() { sel.active = false; }
+    // Written position of the insertion bar.
+    Tick cursorTick() const;
+
+    // Shared by every editor, so music can be copied from one clip to another.
+    static Clipboard& clipboard();
+
+    // Play these MIDI notes once, short (on the given channel 1..16).
+    std::function<void (const std::vector<int>& notes, int channel)> onAudition;
     bool insertMode() const { return insert; }
+    void setInsertMode (bool on) { insert = on; if (onChange) onChange(); }
     const Tuplet& pendingTuplet() const { return tupletPending; }
     const std::string& lastMessage() const { return message; }
 
@@ -55,6 +92,12 @@ public:
     // sits in the empty slot at the end of the measure. -1 if none.
     int targetEntry() const;
 
+    // Selection editing (also used by the mouse tools).
+    void copySelection();
+    bool clearSelectionMusic();
+    bool pasteAtCursor();
+    bool setDynamic (int dynamicIndex); // 0..9 = pppp..ffff on the target entry; toggles off when the same
+
     // Called after every change; the plugin rebuilds playback from it.
     std::function<void()> onChange;
 
@@ -65,6 +108,9 @@ private:
     Tuplet tupletPending;
     int tupletRemaining = 0;
     std::string message;
+    bool frame = true;
+    Selection sel;
+    Tick selAnchor = -1;
 
     std::vector<Score> undoStack, redoStack;
 
@@ -72,10 +118,11 @@ private:
     struct Ref
     {
         bool valid = false;
-        int staff = 0, measure = 0, entry = 0;
+        int staff = 0, measure = 0, entry = 0, layer = 0;
     } last;
 
-    std::vector<Entry>& entries() { return score.staves[cur.staff].measures[cur.measure].entries; }
+    std::vector<Entry>& entries() { return score.staves[cur.staff].measures[cur.measure].layers[cur.layer]; }
+    std::vector<Entry>& entriesAt (const Ref& r) { return score.staves[r.staff].measures[r.measure].layers[r.layer]; }
     bool targetRef (Ref& out) const;
     Entry* target();
     Note* targetNote (Entry& e);
@@ -83,8 +130,12 @@ private:
 
     bool enterValue (int value, bool forceInsert, bool asRest);
     Entry makeEntry (int value, bool asRest);
-    int fitMeasure (int staff, int measure); // returns entries carried into the next measure
-    void afterEdit (int staff, int measure);
+    int fitMeasure (int staff, int measure, int layer); // returns entries carried into the next measure
+    void afterEdit (int staff, int measure, int layer);
+    void audition (const Ref& r);
+    void extendSelection (int delta);
+    Tick removeRange (int staff, int layer, Tick from, Tick to); // returns the end of what was removed
+    void insertAt (int staff, int layer, Tick at, std::vector<Entry> entries);
     void ensureMeasure (int index);
     void clampCursor();
     void changed();

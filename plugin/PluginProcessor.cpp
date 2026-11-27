@@ -60,7 +60,8 @@ void StaffPaperProcessor::projectChanged()
     juce::XmlElement xml ("StaffPaper");
     xml.setAttribute ("version", 1);
     xml.setAttribute ("dark", darkMode);
-    xml.setAttribute ("page", pageView);
+    xml.setAttribute ("tool", tool);
+    xml.setAttribute ("grid", grid);
     xml.setAttribute ("zoom", zoom);
     xml.setAttribute ("tempo", ownTempo.load());
     xml.createNewChildElement ("project")->addTextElement (juce::String (project.toText()));
@@ -82,6 +83,26 @@ std::vector<int> StaffPaperProcessor::heldNotes() const
             if (bits & (1u << b)) notes.push_back (w * 32 + b);
     }
     return notes;
+}
+
+void StaffPaperProcessor::audition (const std::vector<int>& notes, int channel)
+{
+    for (int n : notes)
+    {
+        const auto scope = auditionFifo.write (1);
+        if (scope.blockSize1 > 0) auditionQueue[(size_t) scope.startIndex1] = { n, channel };
+        else if (scope.blockSize2 > 0) auditionQueue[(size_t) scope.startIndex2] = { n, channel };
+    }
+}
+
+void StaffPaperProcessor::updateTrackProperties (const TrackProperties& props)
+{
+    trackColour.store (props.colourARGB.value_or (0u));
+    const auto name = props.name.value_or (juce::String());
+    juce::MessageManager::callAsync ([this, name] {
+        trackName = name;
+        if (onTrackInfo) onTrackInfo();
+    });
 }
 
 // ---------------------------------------------------------------- state
@@ -116,8 +137,9 @@ void StaffPaperProcessor::applyState (const juce::String& text)
     std::string err;
     if (auto* pe = xml->getChildByName ("project"))
         if (! Project::fromText (pe->getAllSubText().toStdString(), p, &err)) return;
-    darkMode = xml->getBoolAttribute ("dark", false);
-    pageView = xml->getBoolAttribute ("page", false);
+    darkMode = xml->getBoolAttribute ("dark", true);
+    tool = xml->getIntAttribute ("tool", 0);
+    grid = xml->getIntAttribute ("grid", 0);
     zoom = (float) xml->getDoubleAttribute ("zoom", 9.0);
     ownTempo.store (xml->getDoubleAttribute ("tempo", 120.0));
     project = std::move (p);
@@ -167,10 +189,17 @@ void StaffPaperProcessor::process (juce::AudioBuffer<Sample>& buffer, juce::Midi
     bool playing = false, looping = false;
     double beat = 0, bpm = 120, loopStart = 0, loopEnd = 0;
     int num = 4, den = 4;
-    if (set->sync)
-    {
-        if (auto* ph = getPlayHead())
-            if (auto pos = ph->getPosition())
+    // Bitwig's meter is read even when the tempo is not synced: the two follow independently.
+    if (auto* ph = getPlayHead())
+        if (auto pos = ph->getPosition())
+        {
+            if (auto ts = pos->getTimeSignature())
+            {
+                hostNum.store (ts->numerator);
+                hostDen.store (ts->denominator);
+                hostHasMeter.store (true);
+            }
+            if (set->sync)
             {
                 playing = pos->getIsPlaying();
                 beat = pos->getPpqPosition().orFallback (0.0);
@@ -179,9 +208,6 @@ void StaffPaperProcessor::process (juce::AudioBuffer<Sample>& buffer, juce::Midi
                 {
                     num = ts->numerator;
                     den = ts->denominator;
-                    hostNum.store (num);
-                    hostDen.store (den);
-                    hostHasMeter.store (true);
                 }
                 if (auto lp = pos->getLoopPoints(); lp && pos->getIsLooping())
                 {
@@ -190,8 +216,8 @@ void StaffPaperProcessor::process (juce::AudioBuffer<Sample>& buffer, juce::Midi
                     loopEnd = lp->ppqEnd;
                 }
             }
-    }
-    else
+        }
+    if (! set->sync)
     {
         if (rewindRequest.exchange (false))
         {
@@ -202,11 +228,8 @@ void StaffPaperProcessor::process (juce::AudioBuffer<Sample>& buffer, juce::Midi
         playing = ownPlaying.load();
         beat = ownBeat;
         bpm = ownTempo.load();
-        if (set->songClip >= 0 && set->songClip < (int) set->sequences.size())
-        {
-            num = 4;
-            den = 4;
-        }
+        num = hostHasMeter.load() ? hostNum.load() : 4;
+        den = hostHasMeter.load() ? hostDen.load() : 4;
     }
     bpm = juce::jlimit (1.0, 999.0, bpm);
     hostPlaying.store (playing);
@@ -320,6 +343,38 @@ void StaffPaperProcessor::process (juce::AudioBuffer<Sample>& buffer, juce::Midi
     }
     else
         runSegment (0, n, beat);
+
+    // ---- audition: entered notes sound once, short, whether or not anything plays
+    {
+        const int toEnd = auditionSamplesLeft;
+        if (auditionCount > 0 && toEnd < n)
+        {
+            for (int i = 0; i < auditionCount; ++i)
+                out.addEvent (juce::MidiMessage::noteOff (auditionSounding[(size_t) i].channel, auditionSounding[(size_t) i].note), juce::jmax (0, toEnd));
+            auditionCount = 0;
+        }
+        auditionSamplesLeft = juce::jmax (0, auditionSamplesLeft - n);
+        const int ready = auditionFifo.getNumReady();
+        if (ready > 0)
+        {
+            // a new note ends the one before it
+            for (int i = 0; i < auditionCount; ++i)
+                out.addEvent (juce::MidiMessage::noteOff (auditionSounding[(size_t) i].channel, auditionSounding[(size_t) i].note), 0);
+            auditionCount = 0;
+            const auto scope = auditionFifo.read (ready);
+            auto take = [&] (int start, int size) {
+                for (int i = 0; i < size; ++i)
+                {
+                    const auto a = auditionQueue[(size_t) (start + i)];
+                    out.addEvent (juce::MidiMessage::noteOn (a.channel, a.note, (juce::uint8) 90), 0);
+                    if (auditionCount < (int) auditionSounding.size()) auditionSounding[(size_t) auditionCount++] = a;
+                }
+            };
+            take (scope.startIndex1, scope.blockSize1);
+            take (scope.startIndex2, scope.blockSize2);
+            auditionSamplesLeft = (int) (sampleRate * 0.28);
+        }
+    }
 
     if (! set->sync && playing) ownBeat = blockEnd;
     else if (! set->sync) ownBeat = beat;

@@ -31,6 +31,8 @@ constexpr juce::juce_wchar tenutoAbove = 0xE4A4, tenutoBelow = 0xE4A5;
 constexpr juce::juce_wchar timeSig0 = 0xE080;
 constexpr juce::juce_wchar tuplet0 = 0xE880;
 constexpr juce::juce_wchar brace = 0xE000;
+// dynamics pppp ... ffff (same order as staffpaper::Dynamic)
+constexpr juce::juce_wchar dynamics[10] = { 0xE529, 0xE52A, 0xE52B, 0xE520, 0xE52C, 0xE52D, 0xE522, 0xE52F, 0xE530, 0xE531 };
 } // namespace Glyph
 
 class MusicFont

@@ -2,6 +2,7 @@
 // Pure C++17, no JUCE, so it can be unit-tested on its own.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -115,6 +116,14 @@ struct Note
     bool parentheses = false;
 };
 
+// Dynamics, softest to loudest. Each plays a fixed velocity (PlaybackSettings::dynamicVelocity).
+enum class Dynamic
+{
+    pppp, ppp, pp, p, mp, mf, f, ff, fff, ffff,
+    Count
+};
+const char* dynamicName (Dynamic);
+
 struct Tuplet
 {
     int actual = 0; // e.g. 3 in "3 in the time of 2"; 0 = no tuplet
@@ -137,6 +146,7 @@ struct Entry
 
     bool hidden = false;
     bool grace = false;
+    bool graceSlash = false; // slashed (acciaccatura) grace note
     StemDir stem = StemDir::Auto;
     BeamMode beam = BeamMode::Auto;
     bool flatBeam = false;
@@ -150,6 +160,11 @@ struct Entry
 
     // A clef change drawn just before this entry (mid-measure clef change).
     std::optional<Clef> clefBefore;
+
+    // A dynamic mark at this entry; it sets the velocity from here on in this staff.
+    std::optional<Dynamic> dynamic;
+    // Hand-set velocity from the velocity lane (1..127); 0 = worked out from the dynamics.
+    int velocity = 0;
 
     Tick duration() const; // 0 for grace notes
     int findNote (int dia) const; // index of the note at this staff position, or -1
@@ -170,10 +185,16 @@ struct MeasureInfo
     Tick pickupLength = 0; // >0 = this measure is shorter (pickup / anacrusis)
 };
 
+// Up to four independent layers (voices) per staff. Layer 1 is the main one;
+// when another layer has music, layers 1 and 3 take stems up, 2 and 4 down.
+constexpr int kLayers = 4;
+
 struct StaffMeasure
 {
     std::optional<Clef> clefChange;
-    std::vector<Entry> entries;
+    std::array<std::vector<Entry>, kLayers> layers;
+
+    bool multiLayer() const; // more than one layer has entries
 };
 
 struct Staff
@@ -197,8 +218,10 @@ struct PlaybackSettings
     double slurEndLength = 0.70;  // the last note of a slur is lifted
     int slurStartVelocity = 8;    // the first note of a slur leans slightly
     int slurEndVelocity = -10;    // ...and the last note tapers
-    int velocity = 80;
+    int velocity = 80;            // before the first dynamic mark
     int accentBoost = 20;
+    // Fixed velocity for each dynamic, pppp ... ffff.
+    std::array<int, (size_t) Dynamic::Count> dynamicVelocity { 12, 22, 34, 46, 58, 70, 84, 98, 112, 124 };
 };
 
 struct Score
@@ -223,16 +246,20 @@ struct Score
     int keyAt (int measure) const;
     Clef clefAt (int staff, int measure) const; // clef in force at the START of a measure
     // Clef in force at an entry (includes mid-measure changes); entry == size() = end of measure.
-    Clef clefAtEntry (int staff, int measure, int entry) const;
+    Clef clefAtEntry (int staff, int measure, int entry, int layer = 0) const;
+    // Clef in force at a time inside a measure (mid-measure changes in any layer count).
+    Clef clefAtTick (int staff, int measure, Tick tick) const;
     Tick measureCapacity (int measure) const; // nominal length (pickup aware)
     Tick measureStart (int measure) const;    // written (unrolled-repeat-free) position
-    Tick contentLength (int staff, int measure) const;
+    int measureAtTick (Tick t) const;          // measure containing a written position (last one if past the end)
+    Tick contentLength (int staff, int measure, int layer = 0) const;
+    Tick onsetOf (int staff, int measure, int layer, int entry) const; // relative to the measure start
 
     // The alteration a note at `dia` gets by default at entry `entryIndex` of a
     // measure: carried accidentals earlier in the measure, else the key signature.
-    int contextAlter (int staff, int measure, int entryIndex, int dia) const;
+    int contextAlter (int staff, int measure, int entryIndex, int dia, int layer = 0) const;
     // The accidental to draw for a note, or nullopt for none.
-    std::optional<int> displayedAccidental (int staff, int measure, int entryIndex, int noteIndex) const;
+    std::optional<int> displayedAccidental (int staff, int measure, int entryIndex, int noteIndex, int layer = 0) const;
 };
 
 } // namespace staffpaper
