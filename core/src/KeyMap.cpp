@@ -80,6 +80,10 @@ namespace
         { Command::Undo, "Undo" },
         { Command::Redo, "Redo" },
         { Command::MeasureMenu, "MeasureMenu" },
+        { Command::MoveToStaffAbove, "MoveToStaffAbove" },
+        { Command::MoveToStaffBelow, "MoveToStaffBelow" },
+        { Command::GrandStaff, "GrandStaff" },
+        { Command::SetClef, "SetClef" },
     };
 
     struct KeyName
@@ -328,6 +332,8 @@ right = NextEntry
 ] = NextMeasure
 shift+up = StaffUp
 shift+down = StaffDown
+ctrl+shift+up = MoveToStaffAbove
+ctrl+shift+down = MoveToStaffBelow
 insert = ToggleInsertMode
 ctrl+i = ToggleInsertMode
 shift+i = ToggleInsertMode
@@ -350,6 +356,11 @@ alt+m = MeasureMenu
 ctrl+k = ShowCommands
 ctrl+alt+left = PrevClip
 ctrl+alt+right = NextClip
+ctrl+shift+g = GrandStaff
+ctrl+alt+shift+1 = SetClef 1
+ctrl+alt+shift+2 = SetClef 2
+ctrl+alt+shift+3 = SetClef 3
+ctrl+alt+shift+4 = SetClef 4
 )";
 }
 

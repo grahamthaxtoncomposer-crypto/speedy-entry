@@ -1,5 +1,7 @@
 #include "PluginEditor.h"
 
+#include "Glyphs.h"
+
 #include "staffpaper/Layout.h"
 #include "staffpaper/MusicXml.h"
 
@@ -13,6 +15,7 @@ const char* kGroups[][2] = {
     { "Ties, beams, stems", "TieNext TiePrevious BreakJoinBeam ResetBeams FlatBeam FreezeStem AutoStem HideEntry" },
     { "Layers (voices)", "ToggleVoice SetLayer" },
     { "Articulations, slurs, dynamics (these change playback)", "Staccato Tenuto Accent SlurStart SlurEnd DynamicsMenu SetDynamic" },
+    { "Staves and clefs", "GrandStaff SetClef MoveToStaffAbove MoveToStaffBelow" },
     { "Moving around", "CursorUp CursorDown OctaveUp OctaveDown PrevEntry NextEntry PrevMeasure NextMeasure StaffUp StaffDown ToggleFrame PrevClip NextClip" },
     { "Selecting, copy and paste", "SelectNext SelectPrev SelectMeasure SelectAll Copy Cut Paste ClearSelection" },
     { "General", "Undo Redo MeasureMenu ShowCommands" },
@@ -58,6 +61,14 @@ juce::String describeCommand (Command c, int arg)
         case Command::SelectNext: return "Extend selection right";
         case Command::SelectPrev: return "Extend selection left";
         case Command::ToggleInsertMode: return "Insert mode on / off";
+        case Command::MoveToStaffAbove: return "Move the note to the staff above";
+        case Command::MoveToStaffBelow: return "Move the note to the staff below";
+        case Command::GrandStaff: return "Grand staff on / off (splits at middle C)";
+        case Command::SetClef:
+        {
+            static const char* names[] = { "Treble", "Bass", "Alto", "Tenor" };
+            return juce::String (names[juce::jlimit (1, 4, arg) - 1]) + " clef at the insertion bar";
+        }
         default: break;
     }
     // split CamelCase
@@ -310,27 +321,116 @@ StaffPaperEditor::StaffPaperEditor (StaffPaperProcessor& p)
     setLookAndFeel (&look);
     setWantsKeyboardFocus (false);
 
-    for (auto* b : { &speedyTool, &selectTool, &insertButton, &tempoSync, &meterSync, &playButton, &stopButton, &rewindButton,
-                     &hearButton, &exportButton, &dragButton, &commandsButton, &settingsButton, &zoomOut, &zoomIn, &themeButton, &colourButton })
-        addAndMakeVisible (*b);
-    for (int l = 0; l < kLayers; ++l)
+    std::vector<juce::Button*> all { &newClip, &dupClip, &delClip, &loopClip, &undoButton, &redoButton, &hearButton, &exportButton,
+                                     &dragButton, &commandsButton, &settingsButton, &zoomOut, &zoomIn, &themeButton, &colourButton,
+                                     &tempoSync, &meterSync, &playButton, &stopButton, &rewindButton, &speedyTool, &selectTool,
+                                     &insertButton, &clefButton, &grandStaffButton, &staffUpButton, &staffDownButton };
+    for (int l = 0; l < kLayers; ++l) all.push_back (&layerButtons[l]);
+    for (auto* b : all)
     {
-        auto& b = layerButtons[l];
-        b.setButtonText (juce::String (l + 1));
-        b.setRadioGroupId (77);
-        b.setTooltip ("Layer " + juce::String (l + 1) + (l == 0 ? "" : " (Cmd+Option+" + juce::String (l + 1) + ")"));
-        b.onClick = [this, l] { if (editor) { editor->perform (Command::SetLayer, l + 1); staff.grabKeyboardFocus(); } };
-        addAndMakeVisible (b);
+        b->setWantsKeyboardFocus (false);
+        b->setMouseClickGrabsKeyboardFocus (false);
+        addAndMakeVisible (*b);
     }
+    addAndMakeVisible (title);
     addAndMakeVisible (gridBox);
-    addChildComponent (tempoSlider);
+    addAndMakeVisible (tempoSlider);
     addAndMakeVisible (staff);
     addAndMakeVisible (clips);
-    clips.toBack(); // the window's buttons sit on the right of the clip strip
+    clips.toBack(); // the sync buttons sit on the right of the clip strip
+    gridBox.setWantsKeyboardFocus (false);
+    tempoSlider.setWantsKeyboardFocus (false);
+
+    // header: the clip and what to do with it
+    title.onClick = [this] { clips.startRename (proc.project.selectedClip); };
+    newClip.setTooltip ("New clip");
+    dupClip.setTooltip ("Duplicate this clip");
+    delClip.setTooltip ("Delete this clip");
+    loopClip.setTooltip ("Loop this clip when it is launched (off: it plays once)");
+    loopClip.toggleLook = true;
+    newClip.onClick = [this] { clips.addClip(); staff.grabKeyboardFocus(); };
+    dupClip.onClick = [this] { clips.duplicateClip (proc.project.selectedClip); staff.grabKeyboardFocus(); };
+    delClip.onClick = [this] {
+        const int i = proc.project.selectedClip;
+        if (proc.project.clips.size() <= 1) return;
+        juce::Component::SafePointer<StaffPaperEditor> safe (this);
+        juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::NoIcon, "Delete clip",
+                                            "Delete \"" + clips.displayName (i) + "\"? This can't be undone.", "Delete", "Cancel", this,
+                                            juce::ModalCallbackFunction::create ([safe, i] (int r) {
+                                                if (safe && r == 1) safe->clips.deleteClip (i);
+                                            }));
+    };
+    loopClip.onClick = [this] { clips.toggleLoop (proc.project.selectedClip); refreshToolbar(); staff.grabKeyboardFocus(); };
+
+    undoButton.setTooltip (tipFor ("Undo", Command::Undo));
+    redoButton.setTooltip (tipFor ("Redo", Command::Redo));
+    undoButton.onClick = [this] { runCommand (Command::Undo); };
+    redoButton.onClick = [this] { runCommand (Command::Redo); };
+    hearButton.setClickingTogglesState (true);
+    hearButton.setTooltip ("Hear notes: play each note once, short, as you enter it");
+    hearButton.onClick = [this] { proc.project.audition = hearButton.getToggleState(); edited(); staff.grabKeyboardFocus(); };
+    exportButton.setTooltip ("Export this clip as MusicXML (.musicxml or compressed .mxl) for Finale, Dorico, Sibelius, MuseScore...");
+    exportButton.onClick = [this] { exportMusicXml(); };
+    dragButton.setTooltip ("Drag this onto a Bitwig track or clip slot to copy the clip as MIDI");
+    dragButton.onStateChange = [this] {
+        if (dragButton.isDown() && juce::Desktop::getInstance().getMainMouseSource().isDragging())
+            startMidiDrag (proc.project.selectedClip);
+    };
+    commandsButton.setTooltip (tipFor ("Every command and its key", Command::ShowCommands));
+    commandsButton.onClick = [this] { if (overlay) { overlay.reset(); staff.grabKeyboardFocus(); } else showCommandsWindow(); };
+    settingsButton.setTooltip ("Playback settings");
+    settingsButton.onClick = [this] { if (overlay) { overlay.reset(); staff.grabKeyboardFocus(); } else showSettings(); };
+    zoomIn.setTooltip ("Zoom in (Cmd + mouse wheel)");
+    zoomOut.setTooltip ("Zoom out");
+    zoomIn.onClick = [this] { staff.setStaffSpace (staff.getStaffSpace() * 1.15f); proc.zoom = staff.getStaffSpace(); };
+    zoomOut.onClick = [this] { staff.setStaffSpace (staff.getStaffSpace() / 1.15f); proc.zoom = staff.getStaffSpace(); };
+    themeButton.onClick = [this] { proc.darkMode = ! proc.darkMode; applyTheme(); edited(); };
+    colourButton.setTooltip ("Colour: Bitwig's track colour, or your own");
+    colourButton.onClick = [this] { showColourMenu(); };
+    zoomOut.setConnectedEdges (juce::Button::ConnectedOnRight);
+    zoomIn.setConnectedEdges (juce::Button::ConnectedOnLeft);
+    undoButton.setConnectedEdges (juce::Button::ConnectedOnRight);
+    redoButton.setConnectedEdges (juce::Button::ConnectedOnLeft);
+
+    // transport and sync
+    playButton.setTooltip ("Play (own transport)");
+    stopButton.setTooltip ("Stop (own transport)");
+    rewindButton.setTooltip ("Back to the start");
+    playButton.onClick = [this] { proc.ownPlay(); };
+    stopButton.onClick = [this] { proc.ownStop(); };
+    rewindButton.onClick = [this] { proc.ownRewind(); };
+    rewindButton.setConnectedEdges (juce::Button::ConnectedOnRight);
+    playButton.setConnectedEdges (juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+    stopButton.setConnectedEdges (juce::Button::ConnectedOnLeft);
+    tempoSlider.setSliderStyle (juce::Slider::LinearBar);
+    tempoSlider.setRange (20, 300, 0.1);
+    tempoSlider.setValue (proc.ownTempo.load(), juce::dontSendNotification);
+    tempoSlider.setTextValueSuffix (" BPM");
+    tempoSlider.setNumDecimalPlacesToDisplay (1);
+    tempoSlider.setVelocityBasedMode (true);
+    tempoSlider.setTooltip ("Tempo: drag, or double-click to type it (set by Bitwig while Tempo is synced)");
+    tempoSlider.onValueChange = [this] { proc.ownTempo.store (tempoSlider.getValue()); };
+    tempoSync.setClickingTogglesState (true);
+    meterSync.setClickingTogglesState (true);
+    tempoSync.setTooltip ("On: Bitwig's transport and tempo drive the playback. Off: use the play buttons and your own BPM.");
+    meterSync.setTooltip ("On: clips take Bitwig's time signature. Off: each clip keeps its own.");
+    tempoSync.onClick = [this] {
+        proc.project.followHostTempo = tempoSync.getToggleState();
+        if (proc.project.followHostTempo) proc.ownStop();
+        edited();
+        refreshToolbar();
+    };
+    meterSync.onClick = [this] {
+        proc.project.followHostMeter = meterSync.getToggleState();
+        edited();
+        refreshToolbar();
+    };
 
     // tools
     speedyTool.setRadioGroupId (55);
     selectTool.setRadioGroupId (55);
+    speedyTool.setConnectedEdges (juce::Button::ConnectedOnRight);
+    selectTool.setConnectedEdges (juce::Button::ConnectedOnLeft);
     speedyTool.setTooltip ("Speedy entry: click a measure and type (Esc leaves or re-enters the frame)");
     selectTool.setTooltip ("Select: drag over music, then Cmd+C / Cmd+X / Cmd+V");
     speedyTool.onClick = [this] {
@@ -348,8 +448,29 @@ StaffPaperEditor::StaffPaperEditor (StaffPaperProcessor& p)
         staff.grabKeyboardFocus();
     };
     insertButton.setClickingTogglesState (true);
-    insertButton.setTooltip ("Insert mode: new notes push the music after them along (Shift+I)");
+    insertButton.setTooltip (tipFor ("Insert mode: new notes push the music after them along", Command::ToggleInsertMode));
     insertButton.onClick = [this] { if (editor) editor->setInsertMode (insertButton.getToggleState()); staff.grabKeyboardFocus(); };
+    for (int l = 0; l < kLayers; ++l)
+    {
+        auto& b = layerButtons[l];
+        b.setText (juce::String (l + 1));
+        b.setRadioGroupId (77);
+        b.setConnectedEdges ((l > 0 ? juce::Button::ConnectedOnLeft : 0) | (l + 1 < kLayers ? juce::Button::ConnectedOnRight : 0));
+        b.setTooltip (tipFor ("Layer " + juce::String (l + 1) + (l < 2 ? " (' switches between 1 and 2)" : ""), Command::SetLayer, l + 1));
+        b.onClick = [this, l] { runCommand (Command::SetLayer, l + 1); };
+    }
+    clefButton.setTooltip ("Clef at the insertion bar: treble, alto, tenor or bass");
+    clefButton.onClick = [this] { showClefMenu(); };
+    grandStaffButton.toggleLook = true;
+    grandStaffButton.setTooltip (tipFor ("Grand staff: splits the music at middle C (middle C goes on the top staff). Off: back to one staff.",
+                                         Command::GrandStaff));
+    grandStaffButton.onClick = [this] { runCommand (Command::GrandStaff); };
+    staffUpButton.setTooltip (tipFor ("Move the note (or the selected notes) to the staff above", Command::MoveToStaffAbove));
+    staffDownButton.setTooltip (tipFor ("Move the note (or the selected notes) to the staff below", Command::MoveToStaffBelow));
+    staffUpButton.onClick = [this] { runCommand (Command::MoveToStaffAbove); };
+    staffDownButton.onClick = [this] { runCommand (Command::MoveToStaffBelow); };
+    staffUpButton.setConnectedEdges (juce::Button::ConnectedOnRight);
+    staffDownButton.setConnectedEdges (juce::Button::ConnectedOnLeft);
 
     for (int g = 0; g <= 10; ++g)
         gridBox.addItem ("Grid: " + StaffView::gridName (g), g + 1);
@@ -360,59 +481,7 @@ StaffPaperEditor::StaffPaperEditor (StaffPaperProcessor& p)
         staff.grabKeyboardFocus();
     };
 
-    // transport and sync
-    playButton.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb6")));
-    stopButton.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xa0")));
-    rewindButton.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x8f\xae")));
-    playButton.onClick = [this] { proc.ownPlay(); };
-    stopButton.onClick = [this] { proc.ownStop(); };
-    rewindButton.onClick = [this] { proc.ownRewind(); };
-    tempoSlider.setSliderStyle (juce::Slider::LinearBar);
-    tempoSlider.setRange (20, 300, 0.1);
-    tempoSlider.setValue (proc.ownTempo.load(), juce::dontSendNotification);
-    tempoSlider.setTextValueSuffix (" BPM");
-    tempoSlider.setNumDecimalPlacesToDisplay (1);
-    tempoSlider.setVelocityBasedMode (true);
-    tempoSlider.setTooltip ("Drag or double-click to type the tempo");
-    tempoSlider.onValueChange = [this] { proc.ownTempo.store (tempoSlider.getValue()); };
-    tempoSlider.setVisible (true);
-
-    tempoSync.setClickingTogglesState (true);
-    meterSync.setClickingTogglesState (true);
-    tempoSync.setTooltip ("On: Bitwig's transport and tempo drive the playback. Off: use the play buttons and your own BPM.");
-    meterSync.setTooltip ("On: clips take Bitwig's time signature");
-    tempoSync.onClick = [this] {
-        proc.project.followHostTempo = tempoSync.getToggleState();
-        if (proc.project.followHostTempo) proc.ownStop();
-        edited();
-        refreshToolbar();
-    };
-    meterSync.onClick = [this] {
-        proc.project.followHostMeter = meterSync.getToggleState();
-        edited();
-        refreshToolbar();
-    };
-
-    hearButton.setClickingTogglesState (true);
-    hearButton.setTooltip ("Play each note once, short, as you enter it");
-    hearButton.onClick = [this] { proc.project.audition = hearButton.getToggleState(); edited(); staff.grabKeyboardFocus(); };
-
-    exportButton.setTooltip ("Save this clip as MusicXML (.musicxml or compressed .mxl) for Finale, Dorico, Sibelius, MuseScore...");
-    exportButton.onClick = [this] { exportMusicXml(); };
-    dragButton.setTooltip ("Drag this onto a Bitwig track or clip slot to copy the clip as MIDI");
-    dragButton.addMouseListener (this, false);
-    dragButton.onStateChange = [this] {
-        if (dragButton.isDown() && juce::Desktop::getInstance().getMainMouseSource().isDragging())
-            startMidiDrag (proc.project.selectedClip);
-    };
-    commandsButton.setTooltip ("Every key command (Cmd+K)");
-    commandsButton.onClick = [this] { showCommandsWindow(); };
-    settingsButton.onClick = [this] { showSettings(); };
-    zoomIn.onClick = [this] { staff.setStaffSpace (staff.getStaffSpace() * 1.15f); proc.zoom = staff.getStaffSpace(); };
-    zoomOut.onClick = [this] { staff.setStaffSpace (staff.getStaffSpace() / 1.15f); proc.zoom = staff.getStaffSpace(); };
-    themeButton.onClick = [this] { proc.darkMode = ! proc.darkMode; applyTheme(); edited(); };
-    colourButton.setTooltip ("Colour: Bitwig's track colour, or your own");
-    colourButton.onClick = [this] { showColourMenu(); };
+    buildPalettes();
 
     staff.setKeyMap (&proc.keyMap);
     staff.onKey = [this] (const juce::String& k, const juce::String& c) {
@@ -455,8 +524,8 @@ StaffPaperEditor::StaffPaperEditor (StaffPaperProcessor& p)
     refreshToolbar();
 
     setResizable (true, true);
-    setResizeLimits (760, 380, 4000, 2400);
-    setSize (1280, 600);
+    setResizeLimits (900, 460, 4000, 2400);
+    setSize (1280, 720);
     startTimerHz (30);
     staff.grabKeyboardFocus();
 }
@@ -528,8 +597,10 @@ void StaffPaperEditor::applyTheme()
     look.setPalette (dark ? HouseLook::Palette::dark (accent) : HouseLook::Palette::light (accent));
     staff.setTheme (dark ? StaffView::Theme::dark (accent) : StaffView::Theme::light (accent));
     const auto& p = look.palette();
-    clips.setTheme ({ p.panel, p.soft, p.ink, p.muted, p.line, accent, juce::Colour (0xff3ddc97) });
-    themeButton.setButtonText (dark ? "Light" : "Dark");
+    clips.setTheme ({ p.panel.darker (dark ? 0.12f : 0.03f), p.soft, p.ink, p.muted, p.line, accent, juce::Colour (0xff3ddc97) });
+    themeButton.setIcon (dark ? Icon::Sun : Icon::Moon);
+    themeButton.setTooltip (dark ? "Light mode" : "Dark mode");
+    colourButton.setSwatch (accent);
     sendLookAndFeelChange();
     repaint();
 }
@@ -538,23 +609,261 @@ void StaffPaperEditor::refreshToolbar()
 {
     const bool own = ! proc.project.followHostTempo;
     tempoSync.setToggleState (! own, juce::dontSendNotification);
-    tempoSync.setButtonText (own ? "Tempo: own" : "Tempo: Bitwig");
+    tempoSync.setText (own ? "Tempo: own" : "Tempo: Bitwig");
     meterSync.setToggleState (proc.project.followHostMeter, juce::dontSendNotification);
-    meterSync.setButtonText (proc.project.followHostMeter ? "Meter: Bitwig" : "Meter: own");
+    meterSync.setText (proc.project.followHostMeter ? "Meter: Bitwig" : "Meter: own");
     for (auto* b : { &playButton, &stopButton, &rewindButton })
         b->setVisible (own);
     tempoSlider.setEnabled (own);
     hearButton.setToggleState (proc.project.audition, juce::dontSendNotification);
     speedyTool.setToggleState (proc.tool == 0, juce::dontSendNotification);
     selectTool.setToggleState (proc.tool == 1, juce::dontSendNotification);
+    gridBox.setEnabled (proc.tool == 1);
+
+    auto& prj = proc.project;
+    const int sel = prj.selectedClip;
+    title.number = juce::String (sel + 1);
+    title.name = clips.displayName (sel);
+    title.colour = clips.clipColour (sel);
+    title.ink = look.palette().ink;
+    title.muted = look.palette().muted;
+    title.repaint();
+    loopClip.setToggleState (sel >= 0 && sel < (int) prj.clips.size() && prj.clips[(size_t) sel].loop && prj.songClip != sel,
+                             juce::dontSendNotification);
+    loopClip.setEnabled (prj.songClip != sel);
+    delClip.setEnabled (prj.clips.size() > 1);
+
     if (editor)
     {
         insertButton.setToggleState (editor->insertMode(), juce::dontSendNotification);
         for (int l = 0; l < kLayers; ++l)
             layerButtons[l].setToggleState (editor->cursor().layer == l, juce::dontSendNotification);
+        const auto& sc = prj.current().score;
+        const auto& c = editor->cursor();
+        const auto clef = sc.clefAtEntry (c.staff, c.measure, c.entry, c.layer);
+        juce::juce_wchar g = Glyph::gClef;
+        float gy = 2.0f;
+        if (clef == Clef::Bass || clef == Clef::Bass8vb || clef == Clef::Bass8va || clef == Clef::Baritone) { g = Glyph::fClef; gy = -3.0f; }
+        else if (clef == Clef::Alto || clef == Clef::Tenor || clef == Clef::Soprano || clef == Clef::MezzoSoprano) { g = Glyph::cClef; gy = 0.0f; }
+        clefButton.setGlyph (juce::String::charToString (g), 18.0f, gy);
+        clefButton.setText (juce::String (clefName (clef)) + juce::String (juce::CharPointer_UTF8 (" \xe2\x96\xbe")));
+        grandStaffButton.setToggleState (sc.isGrandStaff(), juce::dontSendNotification);
+        staffUpButton.setEnabled (sc.isGrandStaff());
+        staffDownButton.setEnabled (sc.isGrandStaff());
+        undoButton.setEnabled (editor->canUndo());
+        redoButton.setEnabled (editor->canRedo());
     }
-    colourButton.setButtonText (proc.project.useTrackColour ? "Colour: track" : "Colour: own");
     resized();
+}
+
+// --------------------------------------------------------------------------- toolbar helpers
+
+juce::String StaffPaperEditor::keysFor (Command c, int arg) const
+{
+    juce::StringArray out;
+    for (const auto& line : juce::StringArray::fromLines (juce::String (proc.keyMap.save())))
+    {
+        const int eq = line.indexOf (" = ");
+        if (eq < 0) continue;
+        KeyStroke k;
+        if (! parseKey (line.substring (0, eq).toStdString(), k)) continue;
+        const auto b = proc.keyMap.lookup (k);
+        if (b.command == c && b.arg == arg) out.add (friendlyKey (k));
+    }
+    return out.joinIntoString ("  or  ");
+}
+
+juce::String StaffPaperEditor::tipFor (const juce::String& what, Command c, int arg) const
+{
+    const auto keys = keysFor (c, arg);
+    return keys.isEmpty() ? what : what + "    " + keys;
+}
+
+void StaffPaperEditor::runCommand (Command c, int arg)
+{
+    if (! editor) return;
+    staff.runCommand (c, arg);
+    staff.grabKeyboardFocus();
+    refreshToolbar();
+}
+
+void StaffPaperEditor::ClipTitle::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    // a chip in the clip's colour with its number, then the name
+    const float h = 24.0f;
+    auto chip = juce::Rectangle<float> (r.getX(), r.getCentreY() - h * 0.5f, std::max (h, 14.0f + 8.0f * (float) number.length()), h);
+    g.setColour (colour);
+    g.fillRoundedRectangle (chip, 6.0f);
+    g.setColour (colour.getPerceivedBrightness() > 0.6f ? juce::Colour (0xff171916) : juce::Colour (0xfff2f0e9));
+    g.setFont (HouseLook::uiFont (13.0f));
+    g.drawText (number, chip, juce::Justification::centred);
+    g.setColour (ink);
+    g.setFont (HouseLook::uiFont (17.0f));
+    auto text = r.withTrimmedLeft (chip.getWidth() + 10.0f);
+    g.drawFittedText (name, text.toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
+    if (isMouseOver())
+    {
+        const float w = std::min (text.getWidth(), juce::GlyphArrangement::getStringWidth (HouseLook::uiFont (17.0f), name));
+        g.setColour (muted);
+        g.fillRect (text.getX(), text.getCentreY() + 11.0f, w, 1.0f);
+    }
+}
+
+void StaffPaperEditor::showClefMenu()
+{
+    if (! editor) return;
+    juce::PopupMenu m;
+    m.addSectionHeader ("Clef at the insertion bar");
+    static const char* names[] = { "Treble", "Bass", "Alto", "Tenor" };
+    const auto cur = proc.project.current().score.clefAtEntry (editor->cursor().staff, editor->cursor().measure, editor->cursor().entry,
+                                                               editor->cursor().layer);
+    static const Clef clefs[] = { Clef::Treble, Clef::Bass, Clef::Alto, Clef::Tenor };
+    for (int i : { 0, 2, 3, 1 }) // the usual order: treble, alto, tenor, bass
+    {
+        const auto keys = keysFor (Command::SetClef, i + 1);
+        m.addItem (i + 1, juce::String (names[i]) + (keys.isNotEmpty() ? "      " + keys : juce::String()), true, cur == clefs[i]);
+    }
+    juce::Component::SafePointer<StaffPaperEditor> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&clefButton).withParentComponent (this), [safe] (int r) {
+        if (safe && r > 0) safe->runCommand (Command::SetClef, r);
+    });
+}
+
+void StaffPaperEditor::buildPalettes()
+{
+    using C = Command;
+    auto u = [] (const char* utf8) { return juce::String (juce::CharPointer_UTF8 (utf8)); };
+    auto glyph = [] (juce::juce_wchar c) { return juce::String::charToString (c); };
+    // SMuFL single notes: double whole ... 64th (stem up)
+    const juce::juce_wchar notes[] = { 0, 0xE1DD, 0xE1DB, 0xE1D9, 0xE1D7, 0xE1D5, 0xE1D3, 0xE1D2, 0xE1D0 };
+    const juce::juce_wchar rests[] = { 0, Glyph::rest64th, Glyph::rest32nd, Glyph::rest16th, Glyph::rest8th, Glyph::restQuarter,
+                                       Glyph::restHalf, Glyph::restWhole, Glyph::restDoubleWhole };
+    static const char* valueNames[] = { "", "64th", "32nd", "16th", "Eighth", "Quarter", "Half", "Whole", "Double whole" };
+
+    auto item = [] (C c, int arg, const juce::String& text, const juce::String& tip, Icon icon = Icon::None,
+                    const juce::String& g = {}, float gs = 0, float gy = 0) {
+        return PaletteItem { c, arg, text, g, gs, gy, icon, tip };
+    };
+
+    Palette notesP { "Notes", {} };
+    for (int v = 8; v >= 1; --v)
+        notesP.items.push_back (item (C::EnterValue, v, {}, juce::String (valueNames[v]) + " note", Icon::None, glyph (notes[v]), 22.0f, 3.0f));
+    notesP.items.push_back (item (C::Dot, 0, {}, "Dot (add or remove)", Icon::None, glyph (Glyph::augmentationDot), 30.0f, 0.0f));
+    notesP.items.push_back (item (C::StartTuplet, 3, {}, "Triplet", Icon::None, glyph (0xE883), 22.0f, 8.0f));
+    notesP.items.push_back (item (C::TupletDialog, 0, "n:m", "Tuplet with any ratio"));
+    notesP.items.push_back (item (C::AddChordNote, 0, u ("+ Chord"), "Add the crossbar's pitch to the chord"));
+    notesP.items.push_back (item (C::RemoveChordNote, 0, u ("\xe2\x88\x92 Chord"), "Remove the crossbar's pitch from the chord"));
+    notesP.items.push_back (item (C::GraceNote, 0, {}, "Grace note", Icon::None, glyph (0xE562), 22.0f, 3.0f));
+    notesP.items.push_back (item (C::SlashGraceNote, 0, {}, "Slashed grace note", Icon::None, glyph (0xE560), 22.0f, 3.0f));
+    notesP.items.push_back (item (C::DeleteEntry, 0, {}, "Delete the note or rest", Icon::Trash));
+    palettes.push_back (notesP);
+
+    Palette restsP { "Rests", {} };
+    for (int v = 8; v >= 1; --v)
+        restsP.items.push_back (item (C::EnterRestValue, v, {}, juce::String (valueNames[v]) + " rest", Icon::None, glyph (rests[v]), 22.0f, 0.0f));
+    restsP.items.push_back (item (C::ToggleRest, 0, u ("Note \xe2\x86\x94 Rest"), "Turn a note into a rest, or back"));
+    palettes.push_back (restsP);
+
+    Palette pitchP { "Pitch", {} };
+    pitchP.items.push_back (item (C::RaiseHalfStep, 0, u ("\xe2\x99\xaf  Up"), "Raise a half step"));
+    pitchP.items.push_back (item (C::LowerHalfStep, 0, u ("\xe2\x99\xad  Down"), "Lower a half step"));
+    pitchP.items.push_back (item (C::RaiseHalfStepMeasure, 0, u ("\xe2\x99\xaf  Measure"), "Raise the whole measure a half step"));
+    pitchP.items.push_back (item (C::LowerHalfStepMeasure, 0, u ("\xe2\x99\xad  Measure"), "Lower the whole measure a half step"));
+    pitchP.items.push_back (item (C::Enharmonic, 0, "Enharmonic", "Respell the note (e.g. C# to Db)"));
+    pitchP.items.push_back (item (C::EnharmonicMeasure, 0, "Enh. measure", "Respell the rest of the measure"));
+    pitchP.items.push_back (item (C::ToggleAccidental, 0, "Show / hide acc.", "Show a courtesy accidental, or hide it"));
+    pitchP.items.push_back (item (C::AccidentalParens, 0, "( acc )", "Accidental in parentheses"));
+    pitchP.items.push_back (item (C::FreezeAccidental, 0, "Freeze acc.", "Freeze the accidental"));
+    pitchP.items.push_back (item (C::OctaveUp, 0, "8va up", "Crossbar up an octave"));
+    pitchP.items.push_back (item (C::OctaveDown, 0, "8va down", "Crossbar down an octave"));
+    palettes.push_back (pitchP);
+
+    Palette tiesP { "Ties & beams", {} };
+    tiesP.items.push_back (item (C::TieNext, 0, "Tie", "Tie to the next note"));
+    tiesP.items.push_back (item (C::TiePrevious, 0, "Tie back", "Tie to the previous note"));
+    tiesP.items.push_back (item (C::BreakJoinBeam, 0, "Break / join beam", "Break the beam before this note, or join it"));
+    tiesP.items.push_back (item (C::ResetBeams, 0, "Reset beams", "Beam by the meter again"));
+    tiesP.items.push_back (item (C::FlatBeam, 0, "Flat beam", "Flat beam"));
+    tiesP.items.push_back (item (C::FreezeStem, 0, u ("Stem \xe2\x86\x95"), "Flip the stem up or down"));
+    tiesP.items.push_back (item (C::AutoStem, 0, "Auto stem", "Stem direction back to automatic"));
+    tiesP.items.push_back (item (C::HideEntry, 0, "Hide", "Hide or show the note or rest"));
+    palettes.push_back (tiesP);
+
+    Palette artP { "Articulations", {} };
+    artP.items.push_back (item (C::Staccato, 0, {}, "Staccato (plays short)", Icon::None, glyph (Glyph::staccatoAbove), 26.0f, 6.0f));
+    artP.items.push_back (item (C::Tenuto, 0, {}, "Tenuto (plays full length)", Icon::None, glyph (Glyph::tenutoAbove), 26.0f, 6.0f));
+    artP.items.push_back (item (C::Accent, 0, {}, "Accent (plays louder)", Icon::None, glyph (Glyph::accentAbove), 26.0f, 6.0f));
+    artP.items.push_back (item (C::SlurStart, 0, "Slur (", "Start a slur here (slurred notes connect)"));
+    artP.items.push_back (item (C::SlurEnd, 0, ") Slur", "End the slur here (the last note is lifted)"));
+    palettes.push_back (artP);
+
+    Palette dynP { "Dynamics", {} };
+    for (int d = 0; d < (int) Dynamic::Count; ++d)
+        dynP.items.push_back (item (C::SetDynamic, d + 1, {}, juce::String (dynamicName ((Dynamic) d)) + " (a fixed velocity, see Settings)",
+                                    Icon::None, glyph (Glyph::dynamics[d]), 24.0f, 1.0f));
+    palettes.push_back (dynP);
+
+    Palette selP { "Select", {} };
+    selP.items.push_back (item (C::SelectPrev, 0, u ("\xe2\x86\x90 Extend"), "Extend the selection left"));
+    selP.items.push_back (item (C::SelectNext, 0, u ("Extend \xe2\x86\x92"), "Extend the selection right"));
+    selP.items.push_back (item (C::SelectMeasure, 0, "Measure", "Select the measure"));
+    selP.items.push_back (item (C::SelectAll, 0, "All", "Select everything"));
+    selP.items.push_back (item (C::Copy, 0, "Copy", "Copy", Icon::Copy));
+    selP.items.push_back (item (C::Cut, 0, "Cut", "Cut", Icon::Cut));
+    selP.items.push_back (item (C::Paste, 0, "Paste", "Paste at the insertion bar", Icon::Paste));
+    selP.items.push_back (item (C::ClearSelection, 0, "Clear", "Clear the selected music (rests remain)", Icon::Erase));
+    palettes.push_back (selP);
+
+    Palette navP { "Move", {} };
+    navP.items.push_back (item (C::ToggleFrame, 0, "Frame", "Leave the entry frame, or go back into the last measure"));
+    navP.items.push_back (item (C::PrevEntry, 0, u ("\xe2\x86\x90 Note"), "Previous note"));
+    navP.items.push_back (item (C::NextEntry, 0, u ("Note \xe2\x86\x92"), "Next note"));
+    navP.items.push_back (item (C::PrevMeasure, 0, u ("\xe2\x86\x90 Measure"), "Previous measure"));
+    navP.items.push_back (item (C::NextMeasure, 0, u ("Measure \xe2\x86\x92"), "Next measure"));
+    navP.items.push_back (item (C::StaffUp, 0, u ("\xe2\x86\x91 Staff"), "Cursor to the staff above"));
+    navP.items.push_back (item (C::StaffDown, 0, u ("\xe2\x86\x93 Staff"), "Cursor to the staff below"));
+    navP.items.push_back (item (C::PrevClip, 0, u ("\xe2\x86\x90 Clip"), "Previous clip"));
+    navP.items.push_back (item (C::NextClip, 0, u ("Clip \xe2\x86\x92"), "Next clip"));
+    navP.items.push_back (item (C::MeasureMenu, 0, u ("Measure\xe2\x80\xa6"), "Meter, key, barlines, repeats, endings...", Icon::Menu));
+    palettes.push_back (navP);
+
+    for (int i = 0; i < (int) palettes.size(); ++i)
+    {
+        auto b = std::make_unique<IconButton> (Icon::None, palettes[(size_t) i].name);
+        b->setRadioGroupId (88);
+        b->setWantsKeyboardFocus (false);
+        b->setMouseClickGrabsKeyboardFocus (false);
+        b->setTooltip (palettes[(size_t) i].name + " palette");
+        b->onClick = [this, i] { showPalette (i); };
+        addAndMakeVisible (*b);
+        paletteTabs.push_back (std::move (b));
+    }
+    showPalette (juce::jlimit (0, (int) palettes.size() - 1, openPalette));
+}
+
+void StaffPaperEditor::showPalette (int index)
+{
+    openPalette = index;
+    for (int i = 0; i < (int) paletteTabs.size(); ++i)
+        paletteTabs[(size_t) i]->setToggleState (i == index, juce::dontSendNotification);
+    paletteButtons.clear();
+    for (const auto& it : palettes[(size_t) index].items)
+    {
+        auto b = std::make_unique<IconButton> (it.icon, it.text);
+        if (it.glyph.isNotEmpty()) b->setGlyph (it.glyph, it.glyphSize, it.glyphY);
+        b->setWantsKeyboardFocus (false);
+        b->setMouseClickGrabsKeyboardFocus (false);
+        b->setTooltip (tipFor (it.tip, it.cmd, it.arg));
+        const auto cmd = it.cmd;
+        const int arg = it.arg;
+        b->onClick = [this, cmd, arg] { runCommand (cmd, arg); };
+        addAndMakeVisible (*b);
+        paletteButtons.push_back (std::move (b));
+    }
+    resized();
+    repaint();
+    if (editor) staff.grabKeyboardFocus();
 }
 
 void StaffPaperEditor::showCommandsWindow()
@@ -649,24 +958,59 @@ bool StaffPaperEditor::keyPressed (const juce::KeyPress& k)
     return false;
 }
 
+namespace
+{
+constexpr int kHeaderH = 48, kLauncherH = 66, kToolbarH = 46, kPaletteH = 46, kStatusH = 24;
+}
+
 void StaffPaperEditor::paint (juce::Graphics& g)
 {
     const auto& p = look.palette();
+    const bool dark = look.isDark();
     g.fillAll (p.page);
-    auto bar = getLocalBounds().removeFromBottom (24);
+    auto r = getLocalBounds();
+
+    // header and toolbars share the panel colour, with hairlines between
+    auto header = r.removeFromTop (kHeaderH);
+    g.setGradientFill (juce::ColourGradient (p.panel.brighter (dark ? 0.04f : 0.0f), 0, 0, p.panel, 0, (float) kHeaderH, false));
+    g.fillRect (header);
+    r.removeFromTop (kLauncherH); // the clip strip paints itself
+    auto bars = r.removeFromTop (kToolbarH + kPaletteH);
+    g.setColour (p.panel);
+    g.fillRect (bars);
+    g.setColour (p.line);
+    g.fillRect (header.removeFromBottom (1));
+    g.setColour (p.line.withAlpha (0.6f));
+    g.fillRect (bars.getX() + 8, bars.getY() + kToolbarH - 1, bars.getWidth() - 16, 1);
+    g.setColour (p.line);
+    g.fillRect (bars.removeFromBottom (1));
+    // a soft shadow onto the staff paper
+    g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (dark ? 0.35f : 0.08f), 0, (float) bars.getBottom() + 1,
+                                             juce::Colours::transparentBlack, 0, (float) bars.getBottom() + 7, false));
+    g.fillRect (r.getX(), bars.getBottom() + 1, r.getWidth(), 6);
+
+    // group separators and small captions
+    g.setColour (p.line);
+    for (int x : separators)
+        if (x < 0)
+            g.fillRect (-x, kHeaderH + kLauncherH + kToolbarH + 10, 1, kPaletteH - 20);
+        else
+            g.fillRect (x, kHeaderH + kLauncherH + 11, 1, kToolbarH - 22);
+    if (layerButtons[0].isVisible())
+    {
+        g.setColour (p.muted);
+        g.setFont (HouseLook::uiFont (10.5f));
+        g.drawText ("LAYER", layerButtons[0].getX() - 44, layerButtons[0].getY(), 40, layerButtons[0].getHeight(), juce::Justification::centredRight);
+    }
+
+    // status bar
+    auto bar = getLocalBounds().removeFromBottom (kStatusH);
     g.setColour (p.panel);
     g.fillRect (bar);
     g.setColour (p.line);
     g.fillRect (bar.removeFromTop (1));
-    // toolbar background
-    auto tb = getLocalBounds().withTrimmedTop (36).removeFromTop (44);
-    g.setColour (p.panel);
-    g.fillRect (tb);
-    g.setColour (p.line);
-    g.fillRect (tb.removeFromBottom (1));
-
     g.setColour (p.muted);
-    g.setFont (juce::FontOptions (HouseLook::uiFontName(), 12.0f, juce::Font::plain));
+    g.setFont (HouseLook::uiFont (12.0f, false));
     juce::String status;
     if (lastKey.isNotEmpty())
         status << "Key: " << lastKey << "  " << (lastCommand.isNotEmpty() ? juce::String (juce::CharPointer_UTF8 ("\xe2\x86\x92 ")) + lastCommand : juce::String ("(not a command, passed to Bitwig)"));
@@ -681,69 +1025,108 @@ void StaffPaperEditor::paint (juce::Graphics& g)
         right << "Own transport  " << (proc.ownPlaying.load() ? "playing" : "stopped");
     if (proc.hostHasMeter.load()) right << "  " << proc.hostNum.load() << "/" << proc.hostDen.load();
     g.drawText (right, bar.reduced (10, 0), juce::Justification::centredRight);
-
-    // swatch on the colour button
-    if (! colourButton.getBounds().isEmpty())
-    {
-        g.setColour (accentColour());
-        g.fillEllipse (colourButton.getBounds().toFloat().withTrimmedLeft (colourButton.getWidth() - 16.0f).withSizeKeepingCentre (8, 8).translated (-4, 0));
-    }
 }
 
 void StaffPaperEditor::resized()
 {
     auto r = getLocalBounds();
-    // row 1: clips, then the window's own buttons on the right
-    auto row1 = r.removeFromTop (36);
-    clips.rightReserve = 8 + 48 + 4 + 26 + 2 + 26 + 6 + 70 + 4 + 82 + 4 + 110 + 4;
-    clips.setBounds (row1);
+    separators.clear();
+    constexpr int bh = 30; // button height
+
+    auto row = [bh] (juce::Rectangle<int> band) { return band.withSizeKeepingCentre (band.getWidth() - 20, bh); };
+    auto placeL = [] (juce::Rectangle<int>& b, juce::Component& c, int w, int gap) {
+        c.setBounds (b.removeFromLeft (w));
+        b.removeFromLeft (gap);
+    };
+    auto placeR = [] (juce::Rectangle<int>& b, juce::Component& c, int w, int gap) {
+        c.setBounds (b.removeFromRight (w));
+        b.removeFromRight (gap);
+    };
+    auto fit = [] (IconButton& b) { return b.idealWidth(); };
+
+    // header
     {
-        auto b = row1.reduced (0, 5).withTrimmedRight (8);
-        auto placeR = [&b] (juce::Component& c, int w, int gap = 4) {
-            c.setBounds (b.removeFromRight (w));
-            b.removeFromRight (gap);
-        };
-        placeR (themeButton, 48);
-        placeR (zoomIn, 26, 2);
-        placeR (zoomOut, 26, 6);
-        placeR (settingsButton, 70);
-        placeR (commandsButton, 82);
-        placeR (colourButton, 110);
+        auto b = row (r.removeFromTop (kHeaderH));
+        placeR (b, colourButton, fit (colourButton), 6);
+        placeR (b, themeButton, 32, 6);
+        placeR (b, zoomIn, 30, 0);
+        placeR (b, zoomOut, 30, 12);
+        placeR (b, settingsButton, 34, 6);
+        placeR (b, commandsButton, 34, 12);
+        placeR (b, dragButton, fit (dragButton), 6);
+        placeR (b, exportButton, fit (exportButton), 12);
+        placeR (b, hearButton, fit (hearButton), 12);
+        placeR (b, redoButton, 32, 0);
+        placeR (b, undoButton, 32, 16);
+        auto left = b;
+        const int wanted = 44 + juce::roundToInt (juce::GlyphArrangement::getStringWidth (HouseLook::uiFont (17.0f), title.name)) + 12;
+        const int titleW = juce::jlimit (120, std::max (120, left.getWidth() - 4 * 36 - 40), wanted);
+        title.setBounds (left.removeFromLeft (titleW).withSizeKeepingCentre (titleW, 36));
+        left.removeFromLeft (8);
+        placeL (left, newClip, fit (newClip), 4);
+        placeL (left, dupClip, 32, 4);
+        placeL (left, loopClip, 32, 4);
+        placeL (left, delClip, 32, 4);
+        for (auto* c : std::initializer_list<juce::Component*> { &delClip, &loopClip, &dupClip, &newClip })
+            if (c->getRight() > undoButton.getX() - 8) c->setBounds ({});
     }
 
-    // row 2: entry tools, sync, hearing, export
-    auto top = r.removeFromTop (44).reduced (8, 7);
-    r.removeFromBottom (24);
-    auto place = [&top] (juce::Component& c, int w, int gap = 4) {
-        c.setBounds (top.removeFromLeft (w));
-        top.removeFromLeft (gap);
-    };
-    place (speedyTool, 64, 2);
-    place (selectTool, 58, 8);
-    place (insertButton, 56, 8);
-    for (int l = 0; l < kLayers; ++l) place (layerButtons[l], 24, l + 1 == kLayers ? 8 : 2);
-    place (gridBox, 128, 14);
-    place (tempoSync, 98, 4);
-    if (! proc.project.followHostTempo)
+    // launcher row: the clip strip, with sync and transport on the right
     {
-        place (rewindButton, 28, 2);
-        place (playButton, 28, 2);
-        place (stopButton, 28, 4);
+        auto band = r.removeFromTop (kLauncherH);
+        auto b = band.withSizeKeepingCentre (band.getWidth() - 20, bh);
+        const int start = b.getRight();
+        placeR (b, meterSync, fit (meterSync), 10);
+        placeR (b, tempoSlider, 96, 6);
+        if (! proc.project.followHostTempo)
+        {
+            placeR (b, stopButton, 32, 0);
+            placeR (b, playButton, 32, 0);
+            placeR (b, rewindButton, 32, 6);
+        }
+        placeR (b, tempoSync, fit (tempoSync), 0);
+        clips.rightReserve = start - b.getRight() + 24;
+        clips.setBounds (band);
     }
-    place (tempoSlider, 92, 4);
-    place (meterSync, 98, 14);
-    place (hearButton, 84, 4);
 
-    auto placeR = [&top] (juce::Component& c, int w, int gap = 4) {
-        c.setBounds (top.removeFromRight (w));
-        top.removeFromRight (gap);
-    };
-    placeR (dragButton, 80);
-    placeR (exportButton, 120);
-    // on a narrow window these go first
-    for (auto* c : std::initializer_list<juce::Component*> { &dragButton, &exportButton })
-        if (c->getX() < hearButton.getRight() + 4) c->setBounds ({});
+    // main toolbar: tools, layers, staves and clefs, grid
+    {
+        auto b = row (r.removeFromTop (kToolbarH));
+        placeL (b, speedyTool, fit (speedyTool), 0);
+        placeL (b, selectTool, fit (selectTool), 8);
+        placeL (b, insertButton, fit (insertButton), 12);
+        separators.push_back (b.getX() - 6);
+        b.removeFromLeft (50); // "LAYER"
+        for (int l = 0; l < kLayers; ++l) placeL (b, layerButtons[l], 30, 0);
+        b.removeFromLeft (12);
+        separators.push_back (b.getX() - 6);
+        placeL (b, clefButton, std::max (96, fit (clefButton)), 6);
+        placeL (b, grandStaffButton, fit (grandStaffButton), 6);
+        placeL (b, staffUpButton, 34, 0);
+        placeL (b, staffDownButton, 34, 12);
+        separators.push_back (b.getX() - 6);
+        placeL (b, gridBox, 136, 0);
+        if (gridBox.getRight() > getWidth() - 10) gridBox.setBounds ({});
+    }
 
+    // palette row: tabs, then the open palette's buttons
+    {
+        auto b = row (r.removeFromTop (kPaletteH));
+        for (auto& t : paletteTabs) placeL (b, *t, t->idealWidth() + 2, 0);
+        for (size_t i = 0; i < paletteTabs.size(); ++i)
+            paletteTabs[i]->setConnectedEdges ((i > 0 ? juce::Button::ConnectedOnLeft : 0)
+                                               | (i + 1 < paletteTabs.size() ? juce::Button::ConnectedOnRight : 0));
+        b.removeFromLeft (14);
+        separators.push_back (-(b.getX() - 7));
+        for (auto& pb : paletteButtons)
+        {
+            const int w = std::max (36, pb->idealWidth());
+            if (w > b.getWidth()) { pb->setBounds ({}); continue; }
+            placeL (b, *pb, w, 4);
+        }
+    }
+
+    r.removeFromBottom (kStatusH);
     staff.setBounds (r);
     if (overlay) overlay->setBounds (r);
 }
@@ -797,7 +1180,7 @@ void StaffPaperEditor::timerCallback()
     if (proc.queuedClip.load() >= 0) clips.repaint(); // blink
 
     static int tick = 0;
-    if (++tick % 10 == 0) repaint (getLocalBounds().removeFromBottom (24));
+    if (++tick % 10 == 0) repaint (getLocalBounds().removeFromBottom (kStatusH));
 }
 
 // --------------------------------------------------------------------------- export

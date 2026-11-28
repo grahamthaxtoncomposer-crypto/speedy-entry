@@ -98,6 +98,16 @@ public:
     bool pasteAtCursor();
     bool setDynamic (int dynamicIndex); // 0..9 = pppp..ffff on the target entry; toggles off when the same
 
+    // Move the note at the crossbar (or the whole entry, or every selected note) to
+    // the staff above (dir -1) or below (+1). It keeps its rhythm: it joins a chord
+    // there when the rhythm matches, else it goes into the first layer with room.
+    bool moveToStaff (int dir);
+    // Single staff -> grand staff splits the music at middle C (C4 and up stay on
+    // top). Grand staff -> single staff brings the lower staff's notes back up.
+    bool setGrandStaff (bool on);
+    // Put a clef at the insertion bar (the staff's opening clef at the very start).
+    bool setClefAtCursor (Clef c);
+
     // Called after every change; the plugin rebuilds playback from it.
     std::function<void()> onChange;
 
@@ -137,6 +147,8 @@ private:
     Tick removeRange (int staff, int layer, Tick from, Tick to); // returns the end of what was removed
     void insertAt (int staff, int layer, Tick at, std::vector<Entry> entries);
     void ensureMeasure (int index);
+    void placeNotes (int staff, int preferredLayer, Tick at, const Entry& rhythm, const std::vector<Note>& notes);
+    static void makeRest (Entry& e);
     void clampCursor();
     void changed();
     void navigated() { last.valid = false; }

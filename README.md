@@ -15,6 +15,13 @@ see `resources/fonts/OFL.txt`).
 - Single staff or grand staff, any clef on any staff, clef changes at a measure
   or before any note. Staves move apart to make room for very high or low notes
   when you leave the entry frame.
+- **Grand staff** button (Cmd+Shift+G) splits a single staff at middle C
+  (middle C goes on the top staff); turning it off brings the notes back up.
+  **Move to staff** buttons (Cmd+Shift+Up / Down) move a note, or the
+  selection, to the other staff. **Clef** button: treble, alto, tenor, bass at
+  the insertion bar (Cmd+Option+Shift+1-4).
+- Every command has a button: palettes for Notes, Rests, Pitch, Ties & beams,
+  Articulations, Dynamics, Select and Move. Tooltips show the keys.
 - Speedy-style entry with the Mac keys: number keys 1-8 (64th to double whole),
   arrows for pitch, `.` dot, `+`/`-` half steps, `9` respell, `*` accidental,
   `=`/`T` tie, Option+number tuplets (Option+1 any ratio), Option+Shift+number
@@ -32,8 +39,10 @@ see `resources/fonts/OFL.txt`).
 - Staccato, tenuto, accent, slurs (`(` and `)`), all change playback,
   Classical-style defaults, adjustable in Settings
 - Hear notes: each note plays once, short, as you enter it
-- Clips in a left-to-right strip like Bitwig's launcher, a song clip that
-  follows Bitwig's timeline, drag-out as MIDI
+- Clips in a left-to-right row of small numbered slots like Bitwig's launcher
+  (double-click or click the name at the top to rename), New / Duplicate /
+  Loop / Delete buttons, a song clip that follows Bitwig's timeline, drag-out
+  as MIDI
 - Tempo and meter follow Bitwig, each switchable; own transport and BPM when
   the tempo is not synced
 - Takes the Bitwig track's colour (or your own pick); light and dark modes

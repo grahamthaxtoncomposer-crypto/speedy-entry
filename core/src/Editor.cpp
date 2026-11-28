@@ -481,7 +481,8 @@ bool Editor::perform (Command cmd, int arg)
     {
         case Command::ToggleFrame: case Command::Undo: case Command::Redo: case Command::Copy: case Command::Cut:
         case Command::Paste: case Command::SelectAll: case Command::ClearSelection: case Command::DeleteEntry:
-        case Command::SetDynamic:
+        case Command::SetDynamic: case Command::MoveToStaffAbove: case Command::MoveToStaffBelow:
+        case Command::GrandStaff: case Command::SetClef:
             break;
         default:
             if (! frame) return false;
@@ -494,6 +495,7 @@ bool Editor::perform (Command cmd, int arg)
         case Command::Copy: case Command::Cut: case Command::ClearSelection: case Command::DeleteEntry:
         case Command::SetDynamic: case Command::Undo: case Command::Redo: case Command::ToggleFrame:
         case Command::Staccato: case Command::Tenuto: case Command::Accent:
+        case Command::MoveToStaffAbove: case Command::MoveToStaffBelow: case Command::SetClef:
             break;
         default:
             sel.active = false;
@@ -838,6 +840,15 @@ bool Editor::perform (Command cmd, int arg)
             changed();
             return true;
 
+        case Command::MoveToStaffAbove: return moveToStaff (-1);
+        case Command::MoveToStaffBelow: return moveToStaff (+1);
+        case Command::GrandStaff: return setGrandStaff (! score.isGrandStaff());
+        case Command::SetClef:
+        {
+            static const Clef clefs[] = { Clef::Treble, Clef::Bass, Clef::Alto, Clef::Tenor };
+            return setClefAtCursor (clefs[std::clamp (arg, 1, 4) - 1]);
+        }
+
         case Command::Undo:
             if (undoStack.empty()) return false;
             redoStack.push_back (score);
@@ -1154,6 +1165,341 @@ bool Editor::setDynamic (int d)
     if (e.dynamic && *e.dynamic == dyn) e.dynamic.reset();
     else e.dynamic = dyn;
     message = std::string ("Dynamic ") + dynamicName (dyn);
+    changed();
+    return true;
+}
+
+} // namespace staffpaper
+
+
+namespace staffpaper
+{
+
+void Editor::makeRest (Entry& e)
+{
+    e.rest = true;
+    e.notes.clear();
+    e.staccato = e.tenuto = e.accent = false;
+    e.slurStart = e.slurEnd = false;
+    e.stem = StemDir::Auto;
+    e.velocity = 0;
+}
+
+void Editor::placeNotes (int staff, int preferredLayer, Tick at, const Entry& rhythm, const std::vector<Note>& notes)
+{
+    if (notes.empty()) return;
+    const int m = score.measureAtTick (at);
+    const Tick ms = score.measureStart (m);
+    const Tick d = rhythm.duration();
+    const Tick cap = score.measureCapacity (m);
+    auto restsFor = [] (Tick len) {
+        std::vector<Entry> out;
+        for (auto [v, dots] : decomposeTicks (std::max<Tick> (0, len)))
+        {
+            Entry r;
+            r.value = v;
+            r.dots = dots;
+            r.rest = true;
+            out.push_back (r);
+        }
+        return out;
+    };
+    Entry add = rhythm;
+    add.rest = false;
+    add.grace = false;
+    add.notes = notes;
+    add.clefBefore.reset();
+    add.dynamic.reset();
+    add.velocity = 0;
+    add.sortNotes();
+
+    // try the preferred layer, then the others
+    std::vector<int> order { preferredLayer };
+    for (int l = 0; l < kLayers; ++l)
+        if (l != preferredLayer) order.push_back (l);
+
+    for (int l : order)
+    {
+        auto& es = score.staves[staff].measures[m].layers[l];
+        if (es.empty())
+        {
+            std::vector<Entry> v = restsFor (at - ms);
+            const bool lone = ! add.tuplet.active();
+            Entry e = add;
+            if (! lone) { e.tuplet = {}; e.tupletStart = false; }
+            if (! lone && l > 0) continue; // a lone tuplet note can't stand alone; try elsewhere
+            v.push_back (lone ? add : e);
+            if (l == 0)
+            {
+                auto tail = restsFor (cap - (at - ms) - v.back().duration());
+                v.insert (v.end(), tail.begin(), tail.end());
+            }
+            es = std::move (v);
+            return;
+        }
+        // exact rhythm match: join the chord
+        Tick t = ms;
+        int first = -1, last = -1;
+        bool fits = true, chord = false;
+        for (int i = 0; i < (int) es.size(); ++i)
+        {
+            auto& e = es[(size_t) i];
+            const Tick ed = e.duration();
+            if (e.grace) continue;
+            if (t == at && ed == d)
+            {
+                if (e.rest)
+                {
+                    e.rest = false;
+                    e.notes.clear();
+                }
+                for (const auto& n : notes)
+                    if (e.findNote (n.pitch.dia) < 0) e.notes.push_back (n);
+                e.sortNotes();
+                chord = true;
+                break;
+            }
+            if (t < at + d && t + ed > at) // overlaps the new note
+            {
+                if (! e.rest || e.tuplet.active()) fits = false;
+                if (first < 0) first = i;
+                last = i;
+            }
+            t += ed;
+        }
+        if (chord) return;
+        if (! fits) continue;
+        if (first < 0)
+        {
+            // the layer ends before the note: pad with rests
+            Tick len = 0;
+            for (const auto& e : es) len += e.duration();
+            if (len > at - ms) continue;
+            auto v = restsFor (at - ms - len);
+            es.insert (es.end(), v.begin(), v.end());
+            es.push_back (add);
+            return;
+        }
+        Tick firstStart = ms, lastEnd = ms;
+        {
+            Tick tt = ms;
+            for (int i = 0; i < (int) es.size(); ++i)
+            {
+                if (i == first) firstStart = tt;
+                tt += es[(size_t) i].duration();
+                if (i == last) lastEnd = tt;
+            }
+        }
+        if (add.tuplet.active()) continue; // a tuplet note needs its matching rhythm
+        std::vector<Entry> v = restsFor (at - firstStart);
+        v.push_back (add);
+        auto tail = restsFor (lastEnd - (at + d));
+        v.insert (v.end(), tail.begin(), tail.end());
+        es.erase (es.begin() + first, es.begin() + last + 1);
+        es.insert (es.begin() + first, v.begin(), v.end());
+        return;
+    }
+    // no room anywhere: overwrite in the preferred layer
+    const Tick removedEnd = removeRange (staff, preferredLayer, at, at + d);
+    std::vector<Entry> v { add };
+    auto tail = restsFor (removedEnd - (at + d));
+    v.insert (v.end(), tail.begin(), tail.end());
+    insertAt (staff, preferredLayer, at, std::move (v));
+}
+
+bool Editor::moveToStaff (int dir)
+{
+    struct Move
+    {
+        int from, layer;
+        Tick at;
+        Entry rhythm;
+        std::vector<Note> notes;
+    };
+    std::vector<Move> moves;
+    const int nStaves = (int) score.staves.size();
+
+    auto clearLayerIfEmpty = [this] (int st, int m, int l) {
+        auto& es = score.staves[st].measures[m].layers[l];
+        if (l > 0 && std::all_of (es.begin(), es.end(), [] (const Entry& e) { return e.rest; })) es.clear();
+    };
+
+    if (sel.active)
+    {
+        if (sel.staffFrom + dir < 0 || sel.staffTo + dir >= nStaves)
+        {
+            message = nStaves < 2 ? "Only one staff: turn on the grand staff first" : "There is no staff there";
+            if (onChange) onChange();
+            return false;
+        }
+        checkpoint();
+        for (int st = sel.staffFrom; st <= sel.staffTo; ++st)
+            for (int m = score.measureAtTick (sel.start); m < score.numMeasures() && score.measureStart (m) < sel.end; ++m)
+                for (int l = 0; l < kLayers; ++l)
+                {
+                    auto& es = score.staves[st].measures[m].layers[l];
+                    Tick t = score.measureStart (m);
+                    for (auto& e : es)
+                    {
+                        if (! e.grace && ! e.rest && t >= sel.start && t < sel.end)
+                        {
+                            moves.push_back ({ st, l, t, e, e.notes });
+                            const auto dyn = e.dynamic;
+                            makeRest (e);
+                            e.dynamic = dyn;
+                        }
+                        t += e.duration();
+                    }
+                }
+        sel.staffFrom += dir;
+        sel.staffTo += dir;
+    }
+    else
+    {
+        Ref r;
+        if (! targetRef (r)) return false;
+        if (r.staff + dir < 0 || r.staff + dir >= nStaves)
+        {
+            message = nStaves < 2 ? "Only one staff: turn on the grand staff first" : "There is no staff there";
+            if (onChange) onChange();
+            return false;
+        }
+        auto& e = entriesAt (r)[(size_t) r.entry];
+        if (e.rest || e.grace) return false;
+        checkpoint();
+        const Tick at = score.measureStart (r.measure) + score.onsetOf (r.staff, r.measure, r.layer, r.entry);
+        const Entry rhythm = e;
+        std::vector<Note> notes;
+        const int k = e.notes.size() > 1 ? e.findNote (cur.dia) : -1;
+        if (k >= 0 && r.staff == cur.staff)
+        {
+            notes.push_back (e.notes[(size_t) k]);
+            e.notes.erase (e.notes.begin() + k);
+        }
+        else
+        {
+            notes = e.notes;
+            const auto dyn = e.dynamic;
+            makeRest (e);
+            e.dynamic = dyn;
+        }
+        moves.push_back ({ r.staff, r.layer, at, rhythm, notes });
+    }
+
+    for (auto& mv : moves)
+    {
+        placeNotes (mv.from + dir, mv.layer, mv.at, mv.rhythm, mv.notes);
+        clearLayerIfEmpty (mv.from, score.measureAtTick (mv.at), mv.layer);
+    }
+    last.valid = false;
+    message = dir < 0 ? "Moved to the staff above" : "Moved to the staff below";
+    changed();
+    return true;
+}
+
+bool Editor::setGrandStaff (bool on)
+{
+    if (on == score.isGrandStaff()) return false;
+    checkpoint();
+    constexpr int middleC = 28; // C4: it and everything above stay on the top staff
+    if (on)
+    {
+        score.setGrandStaff (true);
+        if (score.staves[0].clef == Clef::Bass) score.staves[0].clef = Clef::Treble;
+        auto& top = score.staves[0];
+        auto& bottom = score.staves[1];
+        for (int m = 0; m < score.numMeasures(); ++m)
+        {
+            auto& tm = top.measures[(size_t) m];
+            auto& bm = bottom.measures[(size_t) m];
+            bm.layers = tm.layers;
+            bm.clefChange.reset();
+            for (int l = 0; l < kLayers; ++l)
+            {
+                auto split = [&] (std::vector<Entry>& es, bool keepHigh) {
+                    std::vector<Entry> out;
+                    for (auto e : es)
+                    {
+                        if (! keepHigh) e.clefBefore.reset();
+                        if (! e.rest)
+                        {
+                            std::vector<Note> kept;
+                            for (const auto& n : e.notes)
+                                if ((n.pitch.dia >= middleC) == keepHigh) kept.push_back (n);
+                            e.notes = kept;
+                            if (e.notes.empty())
+                            {
+                                if (e.grace) continue;
+                                const auto dyn = e.dynamic;
+                                makeRest (e);
+                                e.dynamic = dyn;
+                            }
+                        }
+                        out.push_back (e);
+                    }
+                    if (l > 0 && std::all_of (out.begin(), out.end(), [] (const Entry& e) { return e.rest; })) out.clear();
+                    es = std::move (out);
+                };
+                split (tm.layers[(size_t) l], true);
+                split (bm.layers[(size_t) l], false);
+            }
+        }
+        if (cur.staff == 0 && cur.dia < middleC)
+        {
+            cur.staff = 1;
+            cur.dia += clefMiddleLine (Clef::Bass) - clefMiddleLine (score.clefAtEntry (0, cur.measure, cur.entry, cur.layer));
+            cur.dia = std::clamp (cur.dia, 0, 80);
+        }
+        message = "Grand staff: split at middle C";
+    }
+    else
+    {
+        // bring the lower staves' notes up into the top staff
+        for (int st = 1; st < (int) score.staves.size(); ++st)
+            for (int m = 0; m < score.numMeasures(); ++m)
+                for (int l = 0; l < kLayers; ++l)
+                {
+                    Tick t = score.measureStart (m);
+                    for (const auto& e : score.staves[(size_t) st].measures[(size_t) m].layers[(size_t) l])
+                    {
+                        if (! e.rest && ! e.grace) placeNotes (0, l, t, e, e.notes);
+                        t += e.duration();
+                    }
+                }
+        score.setGrandStaff (false);
+        cur.staff = 0;
+        message = "Single staff";
+    }
+    sel.active = false;
+    last.valid = false;
+    changed();
+    return true;
+}
+
+bool Editor::setClefAtCursor (Clef c)
+{
+    checkpoint();
+    auto& sm = score.staves[(size_t) cur.staff].measures[(size_t) cur.measure];
+    auto& es = sm.layers[(size_t) cur.layer];
+    if (cur.entry == 0 || es.empty())
+    {
+        if (cur.measure == 0)
+        {
+            score.staves[(size_t) cur.staff].clef = c;
+            sm.clefChange.reset();
+        }
+        else
+            sm.clefChange = c;
+        if (! es.empty()) es[0].clefBefore.reset();
+    }
+    else if (cur.entry < (int) es.size())
+        es[(size_t) cur.entry].clefBefore = c;
+    else
+    {
+        ensureMeasure (cur.measure + 1);
+        score.staves[(size_t) cur.staff].measures[(size_t) cur.measure + 1].clefChange = c;
+    }
+    message = std::string ("Clef: ") + clefName (c);
     changed();
     return true;
 }

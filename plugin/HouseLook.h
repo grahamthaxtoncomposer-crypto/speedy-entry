@@ -32,6 +32,20 @@ public:
     juce::Font getLabelFont (juce::Label&) override;
 
     static juce::String uiFontName();
+    static juce::Font uiFont (float size, bool bold = true);
+
+    bool isDark() const { return pal.page.getPerceivedBrightness() < 0.5f; }
+    // A raised, rounded control face: soft gradient, hairline border, a little
+    // shadow; lit with the accent when on; pressed sinks in. cl/cr = joined to a
+    // neighbour on the left/right (segmented groups).
+    void drawFace (juce::Graphics&, juce::Rectangle<float>, bool on, bool highlighted, bool down, bool enabled,
+                   bool cl = false, bool cr = false) const;
+    // A sunken field (value displays).
+    void drawWell (juce::Graphics&, juce::Rectangle<float>) const;
+    // The colour for text or an icon on a face.
+    juce::Colour faceInk (bool on, bool toggle, bool enabled) const;
+    void drawTooltip (juce::Graphics&, const juce::String& text, int width, int height) override;
+    juce::Rectangle<int> getTooltipBounds (const juce::String& tipText, juce::Point<int> screenPos, juce::Rectangle<int> parentArea) override;
 
 private:
     Palette pal;

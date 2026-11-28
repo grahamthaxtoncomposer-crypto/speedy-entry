@@ -85,6 +85,11 @@ enum class Command
     Undo,
     Redo,
     MeasureMenu,
+    // staves and clefs
+    MoveToStaffAbove,   // move the note (or the selected notes) to the staff above
+    MoveToStaffBelow,
+    GrandStaff,         // single staff <-> grand staff (split at middle C, which goes up top)
+    SetClef,            // arg = 1 treble, 2 bass, 3 alto, 4 tenor: at the insertion bar
     Count
 };
 

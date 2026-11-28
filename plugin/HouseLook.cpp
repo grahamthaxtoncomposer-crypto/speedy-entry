@@ -90,32 +90,104 @@ void HouseLook::setPalette (const Palette& p)
     setColourScheme (scheme);
 }
 
-void HouseLook::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool highlighted, bool down)
+juce::Font HouseLook::uiFont (float size, bool bold)
 {
-    auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-    const float radius = juce::jmin (10.0f, r.getHeight() * 0.32f);
-    const bool on = b.getToggleState();
+    return juce::Font (juce::FontOptions (uiFontName(), size, bold ? juce::Font::bold : juce::Font::plain));
+}
+
+void HouseLook::drawFace (juce::Graphics& g, juce::Rectangle<float> r, bool on, bool highlighted, bool down, bool enabled,
+                          bool cl, bool cr) const
+{
+    const bool dark = isDark();
     const auto mark = pal.accentMark();
-    auto fill = pal.soft;
-    if (on) fill = pal.soft.interpolatedWith (mark, 0.12f);
-    if (highlighted) fill = fill.brighter (pal.page.getPerceivedBrightness() > 0.5f ? 0.0f : 0.06f).darker (pal.page.getPerceivedBrightness() > 0.5f ? 0.04f : 0.0f);
-    if (down) fill = fill.interpolatedWith (mark, 0.12f);
-    if (! b.isEnabled()) fill = fill.withMultipliedAlpha (0.5f);
-    g.setColour (fill);
+    const float radius = juce::jmin (7.0f, r.getHeight() * 0.3f);
+    r = r.reduced (0.5f, 0.5f).withTrimmedBottom (1.0f); // room for the shadow
+    juce::Path face;
+    face.addRoundedRectangle (r.getX(), r.getY(), r.getWidth(), r.getHeight(), radius, radius, ! cl, ! cr, ! cl, ! cr);
+
+    const float alpha = enabled ? 1.0f : 0.45f;
+    // drop shadow
+    if (! down)
+    {
+        g.setColour (juce::Colours::black.withAlpha ((dark ? 0.45f : 0.12f) * alpha));
+        g.fillPath (face, juce::AffineTransform::translation (0.0f, 1.0f));
+    }
+    // body
+    juce::Colour base = dark ? pal.soft.brighter (0.06f) : juce::Colour (0xfffcfbf8);
+    if (on) base = dark ? base.interpolatedWith (mark, 0.20f) : base.interpolatedWith (mark, 0.16f);
+    if (highlighted && enabled) base = dark ? base.brighter (0.10f) : base.darker (0.03f);
+    auto top = base.brighter (dark ? 0.10f : 0.02f), bottom = base.darker (dark ? 0.12f : 0.05f);
+    if (down) std::swap (top, bottom);
+    g.setGradientFill (juce::ColourGradient (top.withMultipliedAlpha (alpha), 0, r.getY(), bottom.withMultipliedAlpha (alpha), 0, r.getBottom(), false));
+    g.fillPath (face);
+    // a fine highlight along the top edge
+    if (! down)
+    {
+        g.setColour (juce::Colours::white.withAlpha ((dark ? 0.07f : 0.8f) * alpha));
+        g.drawHorizontalLine (juce::roundToInt (r.getY() + 1.0f), r.getX() + (cl ? 0.0f : radius * 0.6f), r.getRight() - (cr ? 0.0f : radius * 0.6f));
+    }
+    // border
+    auto border = on ? mark.withAlpha (dark ? 0.85f : 0.9f) : (dark ? pal.line.brighter (0.05f) : pal.line.darker (0.05f));
+    g.setColour (border.withMultipliedAlpha (alpha));
+    g.strokePath (face, juce::PathStrokeType (1.0f));
+}
+
+void HouseLook::drawWell (juce::Graphics& g, juce::Rectangle<float> r) const
+{
+    const bool dark = isDark();
+    r = r.reduced (0.5f, 0.5f).withTrimmedBottom (1.0f);
+    const float radius = juce::jmin (7.0f, r.getHeight() * 0.3f);
+    g.setColour (dark ? pal.page.darker (0.15f) : juce::Colour (0xffe9e7e0));
     g.fillRoundedRectangle (r, radius);
-    g.setColour (on ? mark : pal.line);
+    g.setColour (juce::Colours::black.withAlpha (dark ? 0.35f : 0.08f));
+    g.drawHorizontalLine (juce::roundToInt (r.getY() + 1.0f), r.getX() + radius * 0.6f, r.getRight() - radius * 0.6f);
+    g.setColour (dark ? pal.line : pal.line.darker (0.05f));
     g.drawRoundedRectangle (r, radius, 1.0f);
 }
 
-void HouseLook::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool)
+juce::Colour HouseLook::faceInk (bool on, bool toggle, bool enabled) const
+{
+    juce::Colour c = pal.ink;
+    if (toggle) c = on ? pal.accentMark() : pal.ink.interpolatedWith (pal.muted, 0.55f);
+    if (on && ! isDark()) c = pal.accentMark().darker (0.25f);
+    return enabled ? c : c.withMultipliedAlpha (0.4f);
+}
+
+void HouseLook::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool highlighted, bool down)
+{
+    drawFace (g, b.getLocalBounds().toFloat(), b.getToggleState(), highlighted, down, b.isEnabled(),
+              b.isConnectedOnLeft(), b.isConnectedOnRight());
+}
+
+void HouseLook::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool down)
 {
     const bool toggle = b.getClickingTogglesState() || b.getRadioGroupId() != 0;
-    juce::Colour c = pal.ink;
-    if (toggle) c = b.getToggleState() ? pal.accentMark() : pal.muted;
-    if (! b.isEnabled()) c = c.withMultipliedAlpha (0.45f);
-    g.setColour (c);
+    g.setColour (faceInk (b.getToggleState(), toggle, b.isEnabled()));
     g.setFont (getTextButtonFont (b, b.getHeight()));
-    g.drawFittedText (b.getButtonText(), b.getLocalBounds().reduced (6, 0), juce::Justification::centred, 1);
+    g.drawFittedText (b.getButtonText(), b.getLocalBounds().reduced (6, 0).translated (0, down ? 0 : -1), juce::Justification::centred, 1);
+}
+
+void HouseLook::drawTooltip (juce::Graphics& g, const juce::String& text, int width, int height)
+{
+    auto r = juce::Rectangle<float> (0, 0, (float) width, (float) height);
+    g.setColour (isDark() ? pal.panel.brighter (0.1f) : juce::Colour (0xfffcfbf8));
+    g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (pal.line);
+    g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
+    g.setColour (pal.ink);
+    g.setFont (uiFont (12.5f, false));
+    g.drawFittedText (text, r.reduced (10, 4).toNearestInt(), juce::Justification::centredLeft, 4);
+}
+
+juce::Rectangle<int> HouseLook::getTooltipBounds (const juce::String& tipText, juce::Point<int> screenPos, juce::Rectangle<int> parentArea)
+{
+    const auto f = uiFont (12.5f, false);
+    const int w = juce::jmin (420, juce::roundToInt (juce::GlyphArrangement::getStringWidth (f, tipText)) + 24);
+    const int lines = juce::roundToInt (juce::GlyphArrangement::getStringWidth (f, tipText) + 24) / 420 + 1;
+    const int h = 10 + lines * 17;
+    return juce::Rectangle<int> (screenPos.x > parentArea.getCentreX() ? screenPos.x - (w + 12) : screenPos.x + 24,
+                                 screenPos.y > parentArea.getCentreY() ? screenPos.y - (h + 6) : screenPos.y + 6, w, h)
+        .constrainedWithin (parentArea);
 }
 
 juce::Font HouseLook::getTextButtonFont (juce::TextButton&, int)
@@ -123,26 +195,24 @@ juce::Font HouseLook::getTextButtonFont (juce::TextButton&, int)
     return juce::Font (juce::FontOptions (uiFontName(), 12.5f, juce::Font::bold));
 }
 
-void HouseLook::drawComboBox (juce::Graphics& g, int width, int height, bool, int, int, int, int, juce::ComboBox& box)
+void HouseLook::drawComboBox (juce::Graphics& g, int width, int height, bool down, int, int, int, int, juce::ComboBox& box)
 {
-    auto r = juce::Rectangle<float> (0, 0, (float) width, (float) height).reduced (0.5f);
-    const float radius = juce::jmin (10.0f, r.getHeight() * 0.32f);
-    g.setColour (pal.soft);
-    g.fillRoundedRectangle (r, radius);
-    g.setColour (box.hasKeyboardFocus (true) ? pal.accentMark() : pal.line);
-    g.drawRoundedRectangle (r, radius, 1.0f);
+    juce::ignoreUnused (down);
+    drawFace (g, { 0, 0, (float) width, (float) height }, false, box.isMouseOver (true), box.isPopupActive(), box.isEnabled());
     juce::Path arrow;
-    const float ax = (float) width - 14.0f, ay = (float) height * 0.5f;
-    arrow.addTriangle (ax - 4, ay - 2, ax + 4, ay - 2, ax, ay + 3);
+    const float ax = (float) width - 14.0f, ay = (float) height * 0.5f - 1.0f;
+    arrow.startNewSubPath (ax - 3.5f, ay - 1.5f);
+    arrow.lineTo (ax, ay + 2.0f);
+    arrow.lineTo (ax + 3.5f, ay - 1.5f);
     g.setColour (pal.muted);
-    g.fillPath (arrow);
+    g.strokePath (arrow, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 juce::Font HouseLook::getComboBoxFont (juce::ComboBox&) { return juce::Font (juce::FontOptions (uiFontName(), 12.5f, juce::Font::bold)); }
 
 void HouseLook::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
 {
-    label.setBounds (6, 1, box.getWidth() - 24, box.getHeight() - 2);
+    label.setBounds (6, 0, box.getWidth() - 24, box.getHeight() - 2);
     label.setFont (getComboBoxFont (box));
 }
 
@@ -155,17 +225,14 @@ void HouseLook::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h,
 {
     if (style == juce::Slider::LinearBar || style == juce::Slider::LinearBarVertical)
     {
-        auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (0.5f);
-        const float radius = juce::jmin (10.0f, r.getHeight() * 0.32f);
-        g.setColour (pal.soft);
-        g.fillRoundedRectangle (r, radius);
+        auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
+        drawWell (g, r);
         if (s.isEnabled())
         {
-            g.setColour (pal.accentMark().withAlpha (0.18f));
-            g.fillRoundedRectangle (r.withWidth (juce::jmax (0.0f, pos - (float) x)), radius);
+            auto in = r.reduced (2.0f, 2.0f).withTrimmedBottom (1.0f);
+            g.setColour (pal.accentMark().withAlpha (0.16f));
+            g.fillRoundedRectangle (in.withWidth (juce::jmax (0.0f, pos - in.getX())), 5.0f);
         }
-        g.setColour (pal.line);
-        g.drawRoundedRectangle (r, radius, 1.0f);
         return;
     }
     // plain horizontal slider: thin track, accent fill, round thumb

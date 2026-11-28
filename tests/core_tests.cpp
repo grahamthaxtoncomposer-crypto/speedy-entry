@@ -415,6 +415,78 @@ static void testLayerSerializationAndXml()
     CHECK (open == 0);
 }
 
+static void testGrandStaffSplitAndMove()
+{
+    Score s = Score::makeEmpty (2);
+    Editor ed (s);
+    // C4 (dia 28), B3 (27), then a chord E3+G4, then A5
+    ed.setCursor ({ 0, 0, 0, 28 });
+    ed.perform (Command::EnterValue, 5);
+    ed.setCursor ({ 0, 0, 1, 27 });
+    ed.perform (Command::EnterValue, 5);
+    ed.setCursor ({ 0, 0, 2, 23 });
+    ed.perform (Command::EnterValue, 5);
+    ed.setCursor ({ 0, 0, 2, 32 });
+    ed.perform (Command::AddChordNote);
+    ed.setCursor ({ 0, 0, 3, 40 });
+    ed.perform (Command::EnterValue, 5);
+    CHECK (s.staves[0].measures[0].layers[0].size() == 4);
+
+    CHECK (ed.perform (Command::GrandStaff));
+    CHECK (s.isGrandStaff());
+    const auto& top = s.staves[0].measures[0].layers[0];
+    const auto& bot = s.staves[1].measures[0].layers[0];
+    CHECK (top.size() == 4 && bot.size() == 4);
+    CHECK (! top[0].rest && top[0].notes[0].pitch.dia == 28); // middle C stays up top
+    CHECK (top[1].rest && ! bot[1].rest && bot[1].notes[0].pitch.dia == 27);
+    CHECK (top[2].notes.size() == 1 && top[2].notes[0].pitch.dia == 32);
+    CHECK (bot[2].notes.size() == 1 && bot[2].notes[0].pitch.dia == 23);
+    CHECK (bot[0].rest && bot[3].rest);
+    CHECK (s.staves[1].clef == Clef::Bass);
+    // playback is unchanged: 5 notes
+    CHECK (buildSequence (s).events.size() == 5);
+
+    // move the high A down to the lower staff, then back up
+    ed.setCursor ({ 0, 0, 3, 40 });
+    CHECK (ed.perform (Command::MoveToStaffBelow));
+    CHECK (s.staves[0].measures[0].layers[0][3].rest);
+    CHECK (! s.staves[1].measures[0].layers[0][3].rest);
+    CHECK (s.staves[1].measures[0].layers[0][3].notes[0].pitch.dia == 40);
+    CHECK (buildSequence (s).events.size() == 5);
+    ed.setCursor ({ 1, 0, 3, 40 });
+    CHECK (ed.perform (Command::MoveToStaffAbove));
+    CHECK (! s.staves[0].measures[0].layers[0][3].rest);
+    CHECK (! ed.perform (Command::MoveToStaffAbove)); // no staff above the top
+
+    // a note whose rhythm doesn't match goes into another layer
+    ed.setCursor ({ 0, 1, 0, 35 });
+    ed.perform (Command::EnterValue, 4); // eighth
+    ed.setCursor ({ 1, 1, 0, 20 });
+    ed.perform (Command::EnterValue, 6); // half
+    ed.setCursor ({ 0, 1, 0, 35 });
+    CHECK (ed.perform (Command::MoveToStaffBelow));
+    const auto& m1 = s.staves[1].measures[1];
+    CHECK (m1.layers[0].size() >= 1 && m1.layers[0][0].value == 6);
+    CHECK (! m1.layers[1].empty() && m1.layers[1][0].notes[0].pitch.dia == 35);
+
+    // back to one staff: nothing is lost
+    const auto before = buildSequence (s).events.size();
+    CHECK (ed.perform (Command::GrandStaff));
+    CHECK (! s.isGrandStaff());
+    CHECK (buildSequence (s).events.size() == before);
+
+    // clefs at the insertion bar
+    ed.setCursor ({ 0, 0, 0, 30 });
+    CHECK (ed.perform (Command::SetClef, 3));
+    CHECK (s.staves[0].clef == Clef::Alto);
+    ed.setCursor ({ 0, 0, 2, 30 });
+    ed.perform (Command::SetClef, 2);
+    CHECK (s.staves[0].measures[0].layers[0][2].clefBefore == Clef::Bass);
+    ed.setCursor ({ 0, 1, 0, 30 });
+    ed.perform (Command::SetClef, 1);
+    CHECK (s.staves[0].measures[1].clefChange == Clef::Treble);
+}
+
 int main()
 {
     testPitch();
@@ -432,6 +504,7 @@ int main()
     testCopyPaste();
     testDynamics();
     testLayerSerializationAndXml();
+    testGrandStaffSplitAndMove();
     if (failures == 0) std::printf ("all core tests passed\n");
     return failures == 0 ? 0 : 1;
 }

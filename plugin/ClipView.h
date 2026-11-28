@@ -6,10 +6,11 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "staffpaper/Project.h"
+#include "Widgets.h"
 
 #include <functional>
 
-class ClipView : public juce::Component
+class ClipView : public juce::Component, private juce::TextEditor::Listener
 {
 public:
     struct Theme
@@ -34,7 +35,20 @@ public:
     void scrollToSelected();
     int rightReserve = 0; // room on the right for the window's own buttons
 
+    // clip actions (also used by the window's buttons)
+    void addClip();
+    void duplicateClip (int i);
+    void deleteClip (int i);
+    void toggleLoop (int i);
+    void startRename (int i);
+    // The name to show: the clip's own, or "Clip n".
+    juce::String displayName (int i) const;
+    bool hasOwnName (int i) const;
+
     void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
@@ -50,15 +64,21 @@ private:
     bool dragStarted = false;
     float scroll = 0;
 
-    static constexpr int kSlot = 132, kGap = 4;
-    juce::Rectangle<int> stopButton() const;
-    juce::Rectangle<int> songButton() const;
-    juce::Rectangle<int> quantizeButton() const;
+    int hover = -1;
+    int renaming = -1;
+    IconButton stopAll { Icon::Stop }, song { Icon::None, "SONG" }, quantize { Icon::None, "Q" };
+    juce::TextEditor nameEditor;
+
+    static constexpr int kSlot = 58, kGap = 4;
     juce::Rectangle<int> slotsArea() const;
-    juce::Rectangle<int> slotArea (int i) const; // i == size() is the "+" slot
+    juce::Rectangle<int> slotArea (int i) const; // i >= size() are empty slots
     juce::Rectangle<int> launchButton (int i) const;
-    int slotAt (juce::Point<int>) const;
+    int slotAt (juce::Point<int>) const; // -1 = none; >= size() = an empty slot
+    int visibleSlots() const;
     void showClipMenu (int i);
-    void rename (int i);
-    void addClip();
+    void showQuantizeMenu();
+    void finishRename (bool keep);
+    void textEditorReturnKeyPressed (juce::TextEditor&) override { finishRename (true); }
+    void textEditorEscapeKeyPressed (juce::TextEditor&) override { finishRename (false); }
+    void textEditorFocusLost (juce::TextEditor&) override { finishRename (true); }
 };

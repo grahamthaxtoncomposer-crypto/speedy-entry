@@ -68,6 +68,9 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
+    // Run a command as if its key was pressed (used by the toolbar buttons).
+    bool runCommand (staffpaper::Command cmd, int arg = 0);
+
     void showMeasureMenu (int measure, juce::Rectangle<int> area);
     void showDynamicsMenu();
     void showTupletDialog();

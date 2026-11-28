@@ -1321,33 +1321,43 @@ bool StaffView::keyPressed (const juce::KeyPress& kp)
         const auto b = keyMap->lookup (k);
         if (b.command == Command::None) continue;
         if (onKey) onKey (describeKey (k), juce::String (commandName (b.command)) + (b.arg ? " " + juce::String (b.arg) : juce::String()));
-        followCursor = true;
-        switch (b.command)
-        {
-            case Command::TupletDialog: if (editor->frameActive()) showTupletDialog(); return true;
-            case Command::DynamicsMenu: showDynamicsMenu(); return true;
-            case Command::ShowCommands:
-            case Command::PrevClip:
-            case Command::NextClip: if (onWindowCommand) onWindowCommand (b.command); return true;
-            case Command::MeasureMenu:
-            {
-                computeLayout();
-                const auto& mg = geo.measures[(size_t) editor->cursor().measure];
-                showMeasureMenu (editor->cursor().measure,
-                                 juce::Rectangle<float> (mg.x - scrollX, 0, mg.width, (float) getHeight()).toNearestInt());
-                return true;
-            }
-            default: break;
-        }
         const bool wasFrame = editor->frameActive();
-        const bool done = editor->perform (b);
-        repaint();
+        const bool done = runCommand (b.command, b.arg);
         // with the frame closed, keys it does not use go to Bitwig (space, numbers...)
         if (! wasFrame && ! done) return false;
         return true; // bound keys are always consumed, even when nothing changed
     }
     if (onKey) onKey (describeKey (candidates.front()), {});
     return false; // unbound: let the host have it (e.g. space for play)
+}
+
+bool StaffView::runCommand (Command cmd, int arg)
+{
+    if (! editor) return false;
+    followCursor = true;
+    switch (cmd)
+    {
+        case Command::TupletDialog: if (editor->frameActive()) showTupletDialog(); return true;
+        case Command::DynamicsMenu: showDynamicsMenu(); return true;
+        case Command::ShowCommands:
+        case Command::PrevClip:
+        case Command::NextClip: if (onWindowCommand) onWindowCommand (cmd); return true;
+        case Command::MeasureMenu:
+        {
+            computeLayout();
+            const auto& mg = geo.measures[(size_t) editor->cursor().measure];
+            showMeasureMenu (editor->cursor().measure,
+                             juce::Rectangle<float> (mg.x - scrollX, 0, mg.width, (float) getHeight()).toNearestInt());
+            return true;
+        }
+        case Command::GrandStaff: case Command::SetClef: case Command::MoveToStaffAbove: case Command::MoveToStaffBelow:
+            spacingDirty = true;
+            break;
+        default: break;
+    }
+    const bool done = editor->perform (cmd, arg);
+    repaint();
+    return done;
 }
 
 bool StaffView::hitTest (juce::Point<float> p, int& staff, int& measure, int& entry, int& dia) const
@@ -1783,7 +1793,7 @@ void StaffView::showMeasureMenu (int m, juce::Rectangle<int> area)
     menu.addItem ("Add measure after", act ([m] (Score& s) { s.insertMeasure (m + 1); }));
     menu.addItem ("Delete measure", score->numMeasures() > 1, false, act ([m] (Score& s) { s.removeMeasure (m); }));
     menu.addSeparator();
-    menu.addItem ("Grand staff", true, score->isGrandStaff(), act ([] (Score& s) { s.setGrandStaff (! s.isGrandStaff()); }));
+    menu.addItem ("Grand staff (splits at middle C)", true, score->isGrandStaff(), [this] { runCommand (Command::GrandStaff, 0); if (onScoreEdited) onScoreEdited(); });
     juce::PopupMenu chan;
     for (int c = 1; c <= 16; ++c)
         chan.addItem ("Channel " + juce::String (c), true, score->staves[(size_t) staff].midiChannel == c,

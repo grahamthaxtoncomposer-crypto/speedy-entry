@@ -79,6 +79,7 @@ if(STAFFPAPER_BUILD_PLUGIN)
         plugin/StaffView.cpp
         plugin/ClipView.cpp
         plugin/HouseLook.cpp
+        plugin/Widgets.cpp
         plugin/Glyphs.cpp)
     target_include_directories(StaffPaper PRIVATE plugin)
     target_compile_definitions(StaffPaper PUBLIC
