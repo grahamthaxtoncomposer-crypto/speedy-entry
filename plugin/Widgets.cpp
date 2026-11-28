@@ -297,8 +297,21 @@ void IconButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
 
     if (glyph.isNotEmpty())
     {
-        g.setFont (musicFont);
-        g.drawText (glyph, juce::Rectangle<float> (x, r.getY() + glyphY, glyphW, r.getHeight()), juce::Justification::centred, false);
+        // fit the glyph's real ink box inside the button, centred
+        juce::GlyphArrangement ga;
+        ga.addLineOfText (musicFont, glyph, 0.0f, 0.0f);
+        juce::Path path;
+        ga.createPath (path);
+        const auto ink = path.getBounds();
+        const auto box = juce::Rectangle<float> (x, r.getY() + 5.0f, glyphW, r.getHeight() - 10.0f);
+        if (! ink.isEmpty())
+        {
+            const float k = std::min (1.0f, std::min (box.getHeight() / ink.getHeight(), (box.getWidth() + 4.0f) / ink.getWidth()));
+            path.applyTransform (juce::AffineTransform::translation (-ink.getCentreX(), -ink.getCentreY())
+                                     .scaled (k)
+                                     .translated (box.getCentreX(), box.getCentreY() + glyphY * 0.0f));
+            g.fillPath (path);
+        }
         x += glyphW + (textW > 0 ? 6.0f : 0.0f);
     }
     else if (icon != Icon::None)
