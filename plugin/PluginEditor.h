@@ -97,6 +97,7 @@ private:
     void showSettings();
     void showColourMenu();
     void showClefMenu();
+    void showOverflowWindow();
     void buildPalettes();
     void showPalette (int index);
     juce::String keysFor (staffpaper::Command, int arg) const;

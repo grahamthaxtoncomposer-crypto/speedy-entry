@@ -24,6 +24,7 @@ namespace
         { Command::TupletDialog, "TupletDialog" },
         { Command::AddChordNote, "AddChordNote" },
         { Command::RemoveChordNote, "RemoveChordNote" },
+        { Command::ClearToRest, "ClearToRest" },
         { Command::ToggleRest, "ToggleRest" },
         { Command::DeleteEntry, "DeleteEntry" },
         { Command::RaiseHalfStep, "RaiseHalfStep" },
@@ -268,8 +269,8 @@ ctrl+7 = StartTuplet 7
 enter = AddChordNote
 shift+delete = RemoveChordNote
 shift+backspace = RemoveChordNote
-backspace = ToggleRest
-delete = DeleteEntry
+backspace = DeleteEntry
+delete = ClearToRest
 
 # --- accidentals and spelling
 plus = RaiseHalfStep

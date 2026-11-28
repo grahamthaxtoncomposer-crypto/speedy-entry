@@ -20,6 +20,11 @@ see `resources/fonts/OFL.txt`).
   **Move to staff** buttons (Cmd+Shift+Up / Down) move a note, or the
   selection, to the other staff. **Clef** button: treble, alto, tenor, bass at
   the insertion bar (Cmd+Option+Shift+1-4).
+- A note that doesn't fit in the measure opens a choice window: tie it over
+  the barline, push the music along, change the time signature, leave it too
+  full, or cancel (keys 1-4, Esc), with "do this every time" (also in Settings).
+- Delete keys: forward delete turns a note into a rest; back delete removes it
+  and closes the gap. Enter adds the crossbar's pitch to the note under the bar.
 - Every command has a button: palettes for Notes, Rests, Pitch, Ties & beams,
   Articulations, Dynamics, Select and Move. Tooltips show the keys.
 - Speedy-style entry with the Mac keys: number keys 1-8 (64th to double whole),

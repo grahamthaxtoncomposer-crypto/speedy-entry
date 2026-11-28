@@ -62,6 +62,7 @@ void StaffPaperProcessor::projectChanged()
     xml.setAttribute ("dark", darkMode);
     xml.setAttribute ("tool", tool);
     xml.setAttribute ("grid", grid);
+    xml.setAttribute ("overflow", overflow);
     xml.setAttribute ("zoom", zoom);
     xml.setAttribute ("tempo", ownTempo.load());
     xml.createNewChildElement ("project")->addTextElement (juce::String (project.toText()));
@@ -140,6 +141,7 @@ void StaffPaperProcessor::applyState (const juce::String& text)
     darkMode = xml->getBoolAttribute ("dark", true);
     tool = xml->getIntAttribute ("tool", 0);
     grid = xml->getIntAttribute ("grid", 0);
+    overflow = juce::jlimit (0, 4, xml->getIntAttribute ("overflow", 0));
     zoom = (float) xml->getDoubleAttribute ("zoom", 9.0);
     ownTempo.store (xml->getDoubleAttribute ("tempo", 120.0));
     project = std::move (p);

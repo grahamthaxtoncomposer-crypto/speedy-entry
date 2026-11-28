@@ -9,6 +9,7 @@
 
 #include <array>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -108,6 +109,23 @@ public:
     // Put a clef at the insertion bar (the staff's opening clef at the very start).
     bool setClefAtCursor (Clef c);
 
+    // What happens when a note or rest doesn't fit in the rest of the measure.
+    enum class Overflow
+    {
+        Ask,   // call onOverflow and wait for resolveOverflow (Push when nobody asks)
+        Tie,   // split it with a tie over the barline, writing over the start of the next measure
+        Push,  // split it with a tie and push the following music along (rebar)
+        Meter, // give the measure a time signature that fits
+        Leave  // leave the measure too full
+    };
+    Overflow overflowPolicy = Overflow::Ask;
+    std::function<void()> onOverflow;
+    bool overflowPending() const { return pendingOverflow.valid; }
+    // Settle the measure that was too full. Ask = cancel (undo the entry).
+    void resolveOverflow (Overflow choice);
+    // A meter that fits the too-full measure (e.g. 5/4), if there is one.
+    std::optional<TimeSig> fittingMeter() const;
+
     // Called after every change; the plugin rebuilds playback from it.
     std::function<void()> onChange;
 
@@ -140,7 +158,9 @@ private:
 
     bool enterValue (int value, bool forceInsert, bool asRest);
     Entry makeEntry (int value, bool asRest);
-    int fitMeasure (int staff, int measure, int layer); // returns entries carried into the next measure
+    int fitMeasure (int staff, int measure, int layer, bool overwrite = false); // returns entries carried into the next measure
+    Ref pendingOverflow;
+    std::optional<Overflow> forcedOverflow;
     void afterEdit (int staff, int measure, int layer);
     void audition (const Ref& r);
     void extendSelection (int delta);

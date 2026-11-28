@@ -487,6 +487,99 @@ static void testGrandStaffSplitAndMove()
     CHECK (s.staves[0].measures[1].clefChange == Clef::Treble);
 }
 
+static void testChordAndDeleteKeys()
+{
+    Score s = Score::makeEmpty (2);
+    Editor ed (s);
+    auto km = KeyMap::defaults();
+    ed.setCursor ({ 0, 0, 0, 30 });
+    for (int i = 0; i < 4; ++i) ed.perform (Command::EnterValue, 5);
+    // go back onto the second note and add a tone with Enter
+    ed.setCursor ({ 0, 0, 1, 34 });
+    CHECK (ed.perform (km.lookup ({ KeyEnter, 0 })));
+    CHECK (s.staves[0].measures[0].layers[0][1].notes.size() == 2);
+    // forward delete: the note becomes a rest, nothing moves
+    ed.setCursor ({ 0, 0, 2, 30 });
+    CHECK (km.lookup ({ KeyDelete, 0 }).command == Command::ClearToRest);
+    CHECK (ed.perform (km.lookup ({ KeyDelete, 0 })));
+    CHECK (s.staves[0].measures[0].layers[0].size() == 4);
+    CHECK (s.staves[0].measures[0].layers[0][2].rest);
+    // back delete: the note goes and the rest of the measure moves left
+    ed.setCursor ({ 0, 0, 0, 30 });
+    CHECK (km.lookup ({ KeyBackspace, 0 }).command == Command::DeleteEntry);
+    CHECK (ed.perform (km.lookup ({ KeyBackspace, 0 })));
+    CHECK (s.staves[0].measures[0].layers[0].size() == 3);
+    CHECK (s.staves[0].measures[0].layers[0][0].notes.size() == 2);
+}
+
+static void testOverflowChoices()
+{
+    using O = Editor::Overflow;
+    auto setup = [] (Score& s, Editor& ed, bool& asked) {
+        ed.onOverflow = [&asked] { asked = true; };
+        ed.setCursor ({ 0, 0, 0, 30 });
+        for (int i = 0; i < 3; ++i) ed.perform (Command::EnterValue, 5);
+        ed.setCursor ({ 0, 1, 0, 32 });
+        ed.perform (Command::EnterValue, 6); // a half note in measure 2
+        ed.setCursor ({ 0, 0, 3, 34 });
+        ed.perform (Command::EnterValue, 6); // a half note on beat 4: one beat too many
+        (void) s;
+    };
+    {
+        Score s = Score::makeEmpty (3);
+        Editor ed (s);
+        bool asked = false;
+        setup (s, ed, asked);
+        CHECK (asked && ed.overflowPending());
+        CHECK (! ed.perform (Command::EnterValue, 5)); // waits for the answer
+        CHECK (ed.fittingMeter() && ed.fittingMeter()->num == 5 && ed.fittingMeter()->den == 4);
+        ed.resolveOverflow (O::Tie);
+        CHECK (! ed.overflowPending());
+        CHECK (s.contentLength (0, 0) == s.measureCapacity (0));
+        const auto& m1 = s.staves[0].measures[1].layers[0];
+        CHECK (m1[0].value == 5 && m1[0].notes[0].pitch.dia == 34); // the tied quarter wrote over the half note
+        CHECK (s.contentLength (0, 1) == 2 * PPQ); // tied quarter + rest where the half note was
+        CHECK (ed.cursor().measure == 1);
+    }
+    {
+        Score s = Score::makeEmpty (3);
+        Editor ed (s);
+        bool asked = false;
+        setup (s, ed, asked);
+        ed.resolveOverflow (O::Push);
+        CHECK (s.staves[0].measures[1].layers[0][0].notes[0].pitch.dia == 34);
+        CHECK (s.staves[0].measures[1].layers[0][1].notes[0].pitch.dia == 32); // pushed along
+    }
+    {
+        Score s = Score::makeEmpty (3);
+        Editor ed (s);
+        bool asked = false;
+        setup (s, ed, asked);
+        ed.resolveOverflow (O::Meter);
+        CHECK (s.timeSigAt (0) == (TimeSig { 5, 4 }));
+        CHECK (s.timeSigAt (1) == (TimeSig { 4, 4 }));
+        CHECK (s.staves[0].measures[0].layers[0].size() == 4);
+    }
+    {
+        Score s = Score::makeEmpty (3);
+        Editor ed (s);
+        bool asked = false;
+        setup (s, ed, asked);
+        ed.resolveOverflow (O::Ask); // cancel
+        CHECK (s.staves[0].measures[0].layers[0].size() == 3);
+        CHECK (! ed.overflowPending());
+    }
+    {
+        Score s = Score::makeEmpty (3);
+        Editor ed (s);
+        bool asked = false;
+        ed.overflowPolicy = O::Leave;
+        setup (s, ed, asked);
+        CHECK (! asked);
+        CHECK (s.contentLength (0, 0) > s.measureCapacity (0));
+    }
+}
+
 int main()
 {
     testPitch();
@@ -505,6 +598,8 @@ int main()
     testDynamics();
     testLayerSerializationAndXml();
     testGrandStaffSplitAndMove();
+    testChordAndDeleteKeys();
+    testOverflowChoices();
     if (failures == 0) std::printf ("all core tests passed\n");
     return failures == 0 ? 0 : 1;
 }

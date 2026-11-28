@@ -48,6 +48,7 @@ public:
     float zoom = 9.0f;
     int tool = 0;      // 0 = Speedy entry, 1 = select
     int grid = 0;      // selection grid, see StaffView::setGrid
+    int overflow = 0;  // staffpaper::Editor::Overflow: what to do when a note doesn't fit (0 = ask)
 
     void projectChanged();     // rebuild playback after an edit
     void reloadKeyMap();

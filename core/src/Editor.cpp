@@ -251,7 +251,7 @@ bool Editor::enterValue (int value, bool forceInsert, bool asRest)
     return true;
 }
 
-int Editor::fitMeasure (int staff, int measure, int layer)
+int Editor::fitMeasure (int staff, int measure, int layer, bool overwrite)
 {
     auto& es = score.staves[staff].measures[measure].layers[layer];
     const Tick cap = score.measureCapacity (measure);
@@ -317,6 +317,22 @@ int Editor::fitMeasure (int staff, int measure, int layer)
         total = cap;
     }
     ensureMeasure (measure + 1);
+    if (overwrite)
+    {
+        // write over the start of the next measure instead of pushing it along
+        Tick len = 0;
+        for (const auto& e : carry) len += e.duration();
+        const Tick at = score.measureStart (measure + 1);
+        const Tick removedEnd = removeRange (staff, layer, at, at + len);
+        for (auto [v, d] : decomposeTicks (std::max<Tick> (0, removedEnd - (at + len))))
+        {
+            Entry r;
+            r.value = v;
+            r.dots = d;
+            r.rest = true;
+            carry.push_back (r);
+        }
+    }
     auto& next = score.staves[staff].measures[measure + 1].layers[layer];
     next.insert (next.begin(), carry.begin(), carry.end());
     fitMeasure (staff, measure + 1, layer); // cascade
@@ -326,7 +342,38 @@ int Editor::fitMeasure (int staff, int measure, int layer)
 void Editor::afterEdit (int staff, int measure, int layer)
 {
     const int before = (int) score.staves[staff].measures[measure].layers[layer].size();
-    const int carried = fitMeasure (staff, measure, layer);
+    int carried = 0;
+    if (score.contentLength (staff, measure, layer) > score.measureCapacity (measure))
+    {
+        auto policy = forcedOverflow ? *forcedOverflow : overflowPolicy;
+        if (policy == Overflow::Ask && ! onOverflow) policy = Overflow::Push;
+        switch (policy)
+        {
+            case Overflow::Ask:
+                pendingOverflow = { true, staff, measure, 0, layer };
+                onOverflow();
+                return; // the cursor waits until the choice is made
+            case Overflow::Tie: carried = fitMeasure (staff, measure, layer, true); break;
+            case Overflow::Push: carried = fitMeasure (staff, measure, layer); break;
+            case Overflow::Meter:
+            {
+                const Ref saved = pendingOverflow;
+                pendingOverflow = { true, staff, measure, 0, layer };
+                if (auto ts = fittingMeter())
+                {
+                    const TimeSig old = score.timeSigAt (measure);
+                    if (measure + 1 < score.numMeasures() && ! score.measures[(size_t) measure + 1].timeSig)
+                        score.measures[(size_t) measure + 1].timeSig = old;
+                    score.measures[(size_t) measure].timeSig = *ts;
+                }
+                else
+                    carried = fitMeasure (staff, measure, layer);
+                pendingOverflow = saved;
+                break;
+            }
+            case Overflow::Leave: break;
+        }
+    }
     const int after = (int) score.staves[staff].measures[measure].layers[layer].size();
 
     if (cur.staff == staff && cur.layer == layer && cur.measure == measure + 1)
@@ -475,13 +522,19 @@ void Editor::startTuplet (int actual, int normal)
 bool Editor::perform (Command cmd, int arg)
 {
     message.clear();
+    // a too-full measure waits for its answer (undo also cancels it)
+    if (pendingOverflow.valid)
+    {
+        if (cmd != Command::Undo) return false;
+        pendingOverflow.valid = false;
+    }
 
     // With the entry frame closed only these work; everything else waits for Esc or a click.
     switch (cmd)
     {
         case Command::ToggleFrame: case Command::Undo: case Command::Redo: case Command::Copy: case Command::Cut:
         case Command::Paste: case Command::SelectAll: case Command::ClearSelection: case Command::DeleteEntry:
-        case Command::SetDynamic: case Command::MoveToStaffAbove: case Command::MoveToStaffBelow:
+        case Command::ClearToRest: case Command::SetDynamic: case Command::MoveToStaffAbove: case Command::MoveToStaffBelow:
         case Command::GrandStaff: case Command::SetClef:
             break;
         default:
@@ -493,7 +546,7 @@ bool Editor::perform (Command cmd, int arg)
     {
         case Command::SelectNext: case Command::SelectPrev: case Command::SelectMeasure: case Command::SelectAll:
         case Command::Copy: case Command::Cut: case Command::ClearSelection: case Command::DeleteEntry:
-        case Command::SetDynamic: case Command::Undo: case Command::Redo: case Command::ToggleFrame:
+        case Command::ClearToRest: case Command::SetDynamic: case Command::Undo: case Command::Redo: case Command::ToggleFrame:
         case Command::Staccato: case Command::Tenuto: case Command::Accent:
         case Command::MoveToStaffAbove: case Command::MoveToStaffBelow: case Command::SetClef:
             break;
@@ -596,6 +649,21 @@ bool Editor::perform (Command cmd, int arg)
                 e->notes.clear();
                 e->staccato = e->tenuto = e->accent = false;
             }
+            changed();
+            return true;
+        }
+
+        case Command::ClearToRest:
+        {
+            if (sel.active) return clearSelectionMusic();
+            if (! frame) return false;
+            Entry* e = target();
+            if (! e || e->rest) return false;
+            checkpoint();
+            const auto dyn = e->dynamic;
+            makeRest (*e);
+            e->dynamic = dyn;
+            for (auto& n : e->notes) n.tieToNext = false;
             changed();
             return true;
         }
@@ -1502,6 +1570,49 @@ bool Editor::setClefAtCursor (Clef c)
     message = std::string ("Clef: ") + clefName (c);
     changed();
     return true;
+}
+
+} // namespace staffpaper
+
+namespace staffpaper
+{
+
+std::optional<TimeSig> Editor::fittingMeter() const
+{
+    if (! pendingOverflow.valid) return {};
+    const int m = pendingOverflow.measure;
+    Tick len = 0;
+    for (int l = 0; l < kLayers; ++l)
+        for (size_t st = 0; st < score.staves.size(); ++st)
+            len = std::max (len, score.contentLength ((int) st, m, l));
+    const TimeSig cur = score.timeSigAt (m);
+    for (int den = cur.den; den <= 32; den *= 2)
+    {
+        const Tick unit = 4 * PPQ / den;
+        if (len % unit == 0 && len / unit <= 32) return TimeSig { (int) (len / unit), den };
+    }
+    return {};
+}
+
+void Editor::resolveOverflow (Overflow choice)
+{
+    if (! pendingOverflow.valid) return;
+    const Ref p = pendingOverflow;
+    pendingOverflow.valid = false;
+    if (choice == Overflow::Ask)
+    {
+        perform (Command::Undo);
+        message = "Cancelled";
+        changed();
+        return;
+    }
+    if (p.staff >= (int) score.staves.size() || p.measure >= score.numMeasures()) return;
+    forcedOverflow = choice;
+    if (choice == Overflow::Meter) pendingOverflow = p;
+    afterEdit (p.staff, p.measure, p.layer);
+    pendingOverflow.valid = false;
+    forcedOverflow.reset();
+    changed();
 }
 
 } // namespace staffpaper

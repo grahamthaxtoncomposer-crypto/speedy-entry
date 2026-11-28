@@ -22,7 +22,8 @@ enum class Command
     AddChordNote,       // add the pitch at the crossbar to the entry (or turn a rest into a note)
     RemoveChordNote,
     ToggleRest,         // note <-> rest
-    DeleteEntry,
+    DeleteEntry,        // delete the note or rest and pull the rest of the measure left
+    ClearToRest,        // turn the note into a rest of the same length
     // pitch
     RaiseHalfStep,
     LowerHalfStep,

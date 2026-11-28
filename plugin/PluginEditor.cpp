@@ -10,7 +10,7 @@ using namespace staffpaper;
 namespace
 {
 const char* kGroups[][2] = {
-    { "Entering notes", "EnterValue InsertValue EnterRestValue Dot StartTuplet TupletDialog AddChordNote RemoveChordNote ToggleRest DeleteEntry GraceNote SlashGraceNote ToggleInsertMode" },
+    { "Entering notes", "EnterValue InsertValue EnterRestValue Dot StartTuplet TupletDialog AddChordNote RemoveChordNote ToggleRest ClearToRest DeleteEntry GraceNote SlashGraceNote ToggleInsertMode" },
     { "Pitch and accidentals", "RaiseHalfStep LowerHalfStep RaiseHalfStepMeasure LowerHalfStepMeasure Enharmonic EnharmonicMeasure ToggleAccidental FreezeAccidental AccidentalParens" },
     { "Ties, beams, stems", "TieNext TiePrevious BreakJoinBeam ResetBeams FlatBeam FreezeStem AutoStem HideEntry" },
     { "Layers (voices)", "ToggleVoice SetLayer" },
@@ -61,6 +61,8 @@ juce::String describeCommand (Command c, int arg)
         case Command::SelectNext: return "Extend selection right";
         case Command::SelectPrev: return "Extend selection left";
         case Command::ToggleInsertMode: return "Insert mode on / off";
+        case Command::ClearToRest: return "Turn the note into a rest";
+        case Command::DeleteEntry: return "Delete the note and close the gap";
         case Command::MoveToStaffAbove: return "Move the note to the staff above";
         case Command::MoveToStaffBelow: return "Move the note to the staff below";
         case Command::GrandStaff: return "Grand staff on / off (splits at middle C)";
@@ -203,6 +205,9 @@ struct SettingsPanel : public Panel
     juce::Label offsetLabel;
     juce::Slider offset;
     juce::TextButton classical { "Classical defaults" };
+    juce::Label overflowLabel;
+    juce::ComboBox overflowBox;
+    std::function<void (int)> setOverflow;
     StaffPaperProcessor& proc;
     std::function<void()> onChanged;
     std::function<bool()> getMidiEntry;
@@ -245,6 +250,16 @@ struct SettingsPanel : public Panel
         offset.onValueChange = [this] { proc.project.offsetBars = offset.getValue() - 1; changed(); };
         addAndMakeVisible (offsetLabel);
         addAndMakeVisible (offset);
+
+        overflowLabel.setText ("When a note doesn't fit in the measure", juce::dontSendNotification);
+        overflowLabel.setColour (juce::Label::textColourId, f);
+        for (auto [id, text] : { std::pair<int, const char*> { 1, "Ask each time" }, { 2, "Tie it over the barline" }, { 3, "Push the music along" },
+                                 { 4, "Change the time signature" }, { 5, "Leave the measure too full" } })
+            overflowBox.addItem (text, id);
+        overflowBox.setSelectedId (proc.overflow + 1, juce::dontSendNotification);
+        overflowBox.onChange = [this] { if (setOverflow) setOverflow (overflowBox.getSelectedId() - 1); };
+        addAndMakeVisible (overflowLabel);
+        addAndMakeVisible (overflowBox);
 
         classical.onClick = [this] {
             const PlaybackSettings d;
@@ -309,8 +324,103 @@ struct SettingsPanel : public Panel
         r.removeFromTop (8);
         offsetLabel.setBounds (r.removeFromTop (24));
         offset.setBounds (r.removeFromTop (28).removeFromLeft (160));
+        r.removeFromTop (12);
+        overflowLabel.setBounds (r.removeFromTop (24));
+        overflowBox.setBounds (r.removeFromTop (30).removeFromLeft (260));
     }
 };
+// The window that asks what to do with a note that doesn't fit in the measure.
+struct OverflowPanel : public juce::Component
+{
+    using O = Editor::Overflow;
+    struct Choice
+    {
+        O what;
+        juce::String key, title, detail;
+    };
+    std::vector<Choice> choices;
+    std::vector<std::unique_ptr<IconButton>> buttons;
+    juce::ToggleButton always { "Do this every time (you can change it in Settings)" };
+    std::function<void (O, bool)> onChoice; // O::Ask = cancel
+    HouseLook& look;
+    juce::Rectangle<int> card;
+
+    OverflowPanel (HouseLook& l, juce::String meterText) : look (l)
+    {
+        choices = {
+            { O::Tie, "1", "Tie it over the barline", "The rest of the note goes into the next measure, tied, over what was there" },
+            { O::Push, "2", "Push the music along", "The rest goes into the next measure, tied, and everything after moves along" },
+            { O::Meter, "3", meterText.isEmpty() ? juce::String ("Change the time signature") : "Make this measure " + meterText,
+              "A new time signature for this measure only; the next one goes back" },
+            { O::Leave, "4", "Leave the measure too full", "Sort it out later" },
+            { O::Ask, "Esc", "Cancel", "Take the note back out" },
+        };
+        for (auto& c : choices)
+        {
+            auto b = std::make_unique<IconButton> (Icon::None, c.title);
+            b->setWantsKeyboardFocus (false);
+            b->setTooltip (c.detail);
+            const auto what = c.what;
+            b->onClick = [this, what] { choose (what); };
+            addAndMakeVisible (*b);
+            buttons.push_back (std::move (b));
+        }
+        always.setWantsKeyboardFocus (false);
+        addAndMakeVisible (always);
+        setWantsKeyboardFocus (true);
+    }
+
+    void choose (O what)
+    {
+        if (onChoice) onChoice (what, always.getToggleState());
+    }
+
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k == juce::KeyPress::escapeKey) { choose (O::Ask); return true; }
+        if (k == juce::KeyPress::returnKey) { choose (O::Tie); return true; }
+        const auto c = k.getTextCharacter();
+        if (c >= '1' && c <= '4') { choose (choices[(size_t) (c - '1')].what); return true; }
+        return true; // nothing else gets through while we ask
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto& p = look.palette();
+        g.fillAll (juce::Colours::black.withAlpha (look.isDark() ? 0.45f : 0.2f));
+        auto r = card.toFloat();
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.fillRoundedRectangle (r.translated (0, 4).expanded (2), 14.0f);
+        g.setColour (p.panel);
+        g.fillRoundedRectangle (r, 12.0f);
+        g.setColour (p.line);
+        g.drawRoundedRectangle (r.reduced (0.5f), 12.0f, 1.0f);
+        g.setColour (p.ink);
+        g.setFont (HouseLook::uiFont (16.0f));
+        g.drawText ("This doesn't fit in the measure", card.reduced (20, 0).withHeight (52).withY (card.getY() + 6), juce::Justification::centredLeft);
+        g.setColour (p.muted);
+        g.setFont (HouseLook::uiFont (12.0f, false));
+        for (size_t i = 0; i < buttons.size(); ++i)
+        {
+            const auto b = buttons[i]->getBounds();
+            g.drawText (choices[i].key, b.getRight() + 8, b.getY(), 40, b.getHeight(), juce::Justification::centredLeft);
+            g.drawText (choices[i].detail, card.getX() + 20, b.getBottom() + 1, card.getWidth() - 40, 16, juce::Justification::centredLeft);
+        }
+    }
+
+    void resized() override
+    {
+        card = getLocalBounds().withSizeKeepingCentre (std::min (520, getWidth() - 20), std::min (getHeight() - 10, 60 + (int) buttons.size() * 52 + 44));
+        auto r = card.reduced (20, 0).withTrimmedTop (58);
+        for (auto& b : buttons)
+        {
+            b->setBounds (r.removeFromTop (32).withWidth (r.getWidth() - 50));
+            r.removeFromTop (20);
+        }
+        always.setBounds (r.removeFromTop (28));
+    }
+};
+
 } // namespace
 
 // --------------------------------------------------------------------------- editor
@@ -553,6 +663,11 @@ void StaffPaperEditor::bindEditor()
     editor->midiEntry = midiEntry;
     editor->heldMidiNotes = [this] { return proc.heldNotes(); };
     editor->onChange = [this] { edited(); };
+    editor->overflowPolicy = (Editor::Overflow) juce::jlimit (0, 4, proc.overflow);
+    editor->onOverflow = [this] {
+        juce::Component::SafePointer<StaffPaperEditor> safe (this);
+        juce::MessageManager::callAsync ([safe] { if (safe) safe->showOverflowWindow(); });
+    };
     editor->onAudition = [this] (const std::vector<int>& notes, int channel) {
         if (proc.project.audition) proc.audition (notes, channel);
     };
@@ -710,6 +825,33 @@ void StaffPaperEditor::ClipTitle::paint (juce::Graphics& g)
     }
 }
 
+void StaffPaperEditor::showOverflowWindow()
+{
+    if (! editor || ! editor->overflowPending()) return;
+    juce::String meter;
+    if (auto ts = editor->fittingMeter()) meter << ts->num << "/" << ts->den;
+    auto panel = std::make_unique<OverflowPanel> (look, meter);
+    panel->onChoice = [this] (Editor::Overflow what, bool always) {
+        if (always && what != Editor::Overflow::Ask) proc.overflow = (int) what;
+        if (editor)
+        {
+            editor->overflowPolicy = (Editor::Overflow) proc.overflow;
+            editor->resolveOverflow (what);
+        }
+        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<StaffPaperEditor> (this)] {
+            if (! safe) return;
+            safe->overlay.reset();
+            safe->resized();
+            safe->staff.grabKeyboardFocus();
+            safe->edited();
+        });
+    };
+    overlay = std::move (panel);
+    addAndMakeVisible (*overlay);
+    resized();
+    overlay->grabKeyboardFocus();
+}
+
 void StaffPaperEditor::showClefMenu()
 {
     if (! editor) return;
@@ -756,7 +898,8 @@ void StaffPaperEditor::buildPalettes()
     notesP.items.push_back (item (C::RemoveChordNote, 0, u ("\xe2\x88\x92 Chord"), "Remove the crossbar's pitch from the chord"));
     notesP.items.push_back (item (C::GraceNote, 0, {}, "Grace note", Icon::None, glyph (0xE562), 22.0f, 3.0f));
     notesP.items.push_back (item (C::SlashGraceNote, 0, {}, "Slashed grace note", Icon::None, glyph (0xE560), 22.0f, 3.0f));
-    notesP.items.push_back (item (C::DeleteEntry, 0, {}, "Delete the note or rest", Icon::Trash));
+    notesP.items.push_back (item (C::ClearToRest, 0, "To rest", "Turn the note into a rest (the music after it stays put)"));
+    notesP.items.push_back (item (C::DeleteEntry, 0, {}, "Delete the note or rest and close the gap (the music after it moves left)", Icon::Trash));
     palettes.push_back (notesP);
 
     Palette restsP { "Rests", {} };
@@ -868,6 +1011,7 @@ void StaffPaperEditor::showPalette (int index)
 
 void StaffPaperEditor::showCommandsWindow()
 {
+    if (editor && editor->overflowPending()) return;
     const auto& p = look.palette();
     auto panel = std::make_unique<KeysPanel> (proc, p.panel, p.ink);
     panel->onClose = [this] { overlay.reset(); staff.grabKeyboardFocus(); };
@@ -878,12 +1022,17 @@ void StaffPaperEditor::showCommandsWindow()
 
 void StaffPaperEditor::showSettings()
 {
+    if (editor && editor->overflowPending()) return;
     const auto& p = look.palette();
     auto panel = std::make_unique<SettingsPanel> (proc, p.panel, p.ink);
     panel->onClose = [this] { overlay.reset(); staff.grabKeyboardFocus(); };
     panel->onChanged = [this] { edited(); };
     panel->getMidiEntry = [this] { return editor && editor->midiEntry; };
     panel->setMidiEntry = [this] (bool on) { if (editor) editor->midiEntry = on; };
+    panel->setOverflow = [this] (int o) {
+        proc.overflow = o;
+        if (editor) editor->overflowPolicy = (Editor::Overflow) o;
+    };
     panel->refreshToggles();
     overlay = std::move (panel);
     addAndMakeVisible (*overlay);
@@ -947,6 +1096,7 @@ void StaffPaperEditor::showColourMenu()
 
 bool StaffPaperEditor::keyPressed (const juce::KeyPress& k)
 {
+    if (editor && editor->overflowPending() && overlay) return overlay->keyPressed (k);
     if (overlay && k == juce::KeyPress::escapeKey)
     {
         overlay.reset();
