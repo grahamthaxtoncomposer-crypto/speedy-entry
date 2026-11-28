@@ -1,0 +1,60 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    name: macOS (Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4 --target core_tests StaffPaper_CLAP StaffPaper_VST3 StaffPaper_Standalone
+
+      - name: Core tests
+        run: ./build/core_tests
+
+      - name: Sign (ad hoc) and package
+        run: |
+          set -e
+          ART=build/StaffPaper_artefacts/Release
+          mkdir -p dist
+          for b in "$ART"/CLAP/*.clap "$ART"/VST3/*.vst3 "$ART"/Standalone/*.app; do
+            codesign --force --deep --sign - "$b"
+            cp -R "$b" dist/
+          done
+          cp docs/INSTALL-mac.txt dist/
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-macOS-apple-silicon
+          path: dist
+
+  linux-checks:
+    name: Core tests and notation render
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libfreetype-dev libfontconfig1-dev
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --target core_tests StaffPaperRenderCheck
+      - name: Core tests
+        run: ./build/core_tests
+      - name: Render sample score
+        run: ./build/StaffPaperRenderCheck_artefacts/Release/StaffPaperRenderCheck renders
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notation-renders
+          path: renders

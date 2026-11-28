@@ -1,0 +1,17 @@
+Installing on your Mac
+======================
+
+1. Quit Bitwig.
+2. Copy the .clap file into   ~/Library/Audio/Plug-Ins/CLAP/
+   (optional) copy the .vst3 into ~/Library/Audio/Plug-Ins/VST3/
+   In Finder: Go menu > Go to Folder... and paste the path. Create the CLAP folder if it is missing.
+3. These builds are not notarised by Apple, so macOS blocks them at first.
+   Open Terminal and run (copy the whole line):
+
+   xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/*.clap ~/Library/Audio/Plug-Ins/VST3/*.vst3
+
+4. Start Bitwig. In Settings > Locations make sure "CLAP" plug-in scanning is on, then rescan.
+5. Put the plugin on an instrument track BEFORE your instrument (it is a note effect),
+   open its window, click on the staff once, and start typing.
+
+The .app is a standalone version for trying the keys without Bitwig.
