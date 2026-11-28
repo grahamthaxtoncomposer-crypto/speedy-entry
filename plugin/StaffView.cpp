@@ -247,7 +247,7 @@ StaffView::MeasureGeom StaffView::layoutMeasure (int m, float x, bool sysStart)
                 else
                 {
                     const double d = (double) std::max<Tick> (e.duration(), PPQ / 16);
-                    w = space * (1.3f + 2.3f * (float) std::sqrt (d / (double) PPQ)) * scale;
+                    w = space * (1.3f + 2.3f * (float) std::sqrt (d / (double) PPQ)) * scale * stretch;
                 }
                 auto it = spacing.find (k);
                 spacing[k] = (it == spacing.end()) ? w : std::min (it->second, w);
@@ -263,8 +263,13 @@ StaffView::MeasureGeom StaffView::layoutMeasure (int m, float x, bool sysStart)
         colX[k] = cx;
         if (k.order == 0) mg.tickX.push_back ({ k.tick, cx });
         cx += w + post[k];
+        springs += w / stretch;
     }
-    if (spacing.empty()) cx += space * 7.0f * scale;
+    if (spacing.empty())
+    {
+        cx += space * 7.0f * scale * stretch;
+        springs += space * 7.0f * scale;
+    }
     cx += space * 0.6f;
     if (info.repeatEnd) cx += space * 1.4f;
     mg.width = std::max (cx - x, space * 6.0f);
@@ -327,6 +332,15 @@ void StaffView::computeSpacing()
         middleY[(size_t) s] = middleY[(size_t) s - 1] + std::max (space * 13.0f, need);
     }
     stavesBottom = middleY.back() + std::max (space * 6.0f, (float) below.back() * 0.5f * space + space * (dyn.back() ? 5.5f : 3.0f));
+    // centre the staves in the room above the velocity lane, so the margins match
+    const float room = (float) getHeight() - laneHeight();
+    const float topInk = middleY.front() - std::max (8.0f, (float) above[0] * 0.5f + 2.0f) * space * 0.5f - space * 2.5f;
+    const float shift = (room - (stavesBottom - topInk)) * 0.5f - topInk;
+    if (shift > 0)
+    {
+        for (auto& y : middleY) y += shift;
+        stavesBottom += shift;
+    }
     spacingDirty = false;
     spacingMeasure = editor ? editor->cursor().measure : -1;
     spacingFrame = editor ? editor->frameActive() : false;
@@ -345,14 +359,25 @@ void StaffView::computeLayout()
         computeSpacing();
 
     const float left = space * (nStaves > 1 ? 3.0f : 1.5f);
+    // Short music is spread out to fill the width, with the same margin on both sides.
     float x = left;
-    for (int m = 0; m < score->numMeasures(); ++m)
+    for (int pass = 0; pass < 2; ++pass)
     {
-        auto mg = layoutMeasure (m, x, m == 0);
-        x += mg.width;
-        geo.measures.push_back (std::move (mg));
+        if (pass == 0) stretch = 1.0f;
+        springs = 0;
+        geo.measures.clear();
+        x = left;
+        for (int m = 0; m < score->numMeasures(); ++m)
+        {
+            auto mg = layoutMeasure (m, x, m == 0);
+            x += mg.width;
+            geo.measures.push_back (std::move (mg));
+        }
+        const float room = (float) getWidth() - left - x;
+        if (pass > 0 || room <= 1.0f || springs <= 0) break;
+        stretch = juce::jmin (4.0f, 1.0f + room / springs);
     }
-    geo.totalWidth = x + space * 4.0f;
+    geo.totalWidth = x + left;
     geo.totalHeight = stavesBottom;
 
     velocities = computeVelocities (*score);

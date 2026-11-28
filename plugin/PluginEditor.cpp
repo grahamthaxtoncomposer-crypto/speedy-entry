@@ -443,6 +443,11 @@ StaffPaperEditor::StaffPaperEditor (StaffPaperProcessor& p)
         addAndMakeVisible (*b);
     }
     addAndMakeVisible (title);
+    layerCaption.setText ("LAYER", juce::dontSendNotification);
+    layerCaption.setJustificationType (juce::Justification::centredRight);
+    layerCaption.setFont (HouseLook::uiFont (10.5f));
+    layerCaption.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (layerCaption);
     addAndMakeVisible (gridBox);
     addAndMakeVisible (tempoSlider);
     addAndMakeVisible (staff);
@@ -712,6 +717,7 @@ void StaffPaperEditor::applyTheme()
     look.setPalette (dark ? HouseLook::Palette::dark (accent) : HouseLook::Palette::light (accent));
     staff.setTheme (dark ? StaffView::Theme::dark (accent) : StaffView::Theme::light (accent));
     const auto& p = look.palette();
+    layerCaption.setColour (juce::Label::textColourId, p.muted);
     clips.setTheme ({ p.panel.darker (dark ? 0.12f : 0.03f), p.soft, p.ink, p.muted, p.line, accent, juce::Colour (0xff3ddc97) });
     themeButton.setIcon (dark ? Icon::Sun : Icon::Moon);
     themeButton.setTooltip (dark ? "Light mode" : "Dark mode");
@@ -894,8 +900,6 @@ void StaffPaperEditor::buildPalettes()
     notesP.items.push_back (item (C::Dot, 0, {}, "Dot (add or remove)", Icon::None, glyph (Glyph::augmentationDot), 30.0f, 0.0f));
     notesP.items.push_back (item (C::StartTuplet, 3, {}, "Triplet", Icon::None, glyph (0xE883), 22.0f, 8.0f));
     notesP.items.push_back (item (C::TupletDialog, 0, "n:m", "Tuplet with any ratio"));
-    notesP.items.push_back (item (C::AddChordNote, 0, u ("+ Chord"), "Add the crossbar's pitch to the chord"));
-    notesP.items.push_back (item (C::RemoveChordNote, 0, u ("\xe2\x88\x92 Chord"), "Remove the crossbar's pitch from the chord"));
     notesP.items.push_back (item (C::GraceNote, 0, {}, "Grace note", Icon::None, glyph (0xE562), 22.0f, 3.0f));
     notesP.items.push_back (item (C::SlashGraceNote, 0, {}, "Slashed grace note", Icon::None, glyph (0xE560), 22.0f, 3.0f));
     notesP.items.push_back (item (C::ClearToRest, 0, "To rest", "Turn the note into a rest (the music after it stays put)"));
@@ -1146,12 +1150,6 @@ void StaffPaperEditor::paint (juce::Graphics& g)
             g.fillRect (-x, kHeaderH + kLauncherH + kToolbarH + 10, 1, kPaletteH - 20);
         else
             g.fillRect (x, kHeaderH + kLauncherH + 11, 1, kToolbarH - 22);
-    if (layerButtons[0].isVisible())
-    {
-        g.setColour (p.muted);
-        g.setFont (HouseLook::uiFont (10.5f));
-        g.drawText ("LAYER", layerButtons[0].getX() - 44, layerButtons[0].getY(), 40, layerButtons[0].getHeight(), juce::Justification::centredRight);
-    }
 
     // status bar
     auto bar = getLocalBounds().removeFromBottom (kStatusH);
@@ -1239,41 +1237,80 @@ void StaffPaperEditor::resized()
         clips.setBounds (band);
     }
 
+    // Lay out groups of controls across a row: controls in a group sit `inner`
+    // apart, and the free space is shared out evenly between the groups, so the
+    // row is filled edge to edge with even margins.
+    struct Item { juce::Component* c; int w; int gapAfter; };
+    auto layoutRow = [] (juce::Rectangle<int> b, std::vector<std::vector<Item>> groups, std::vector<int>& seps, bool palette) {
+        int used = 0;
+        for (auto& g : groups)
+            for (size_t i = 0; i < g.size(); ++i) used += g[i].w + (i + 1 < g.size() ? g[i].gapAfter : 0);
+        const int nGaps = (int) groups.size() - 1;
+        const int minGap = 20;
+        // too narrow: drop controls from the last group until it fits
+        while (! groups.empty() && used + nGaps * minGap > b.getWidth() && ! groups.back().empty())
+        {
+            auto& last = groups.back();
+            last.back().c->setBounds ({});
+            used -= last.back().w + (last.size() > 1 ? last[last.size() - 2].gapAfter : 0);
+            last.pop_back();
+        }
+        const int gap = nGaps > 0 ? std::min (std::max (minGap, (b.getWidth() - used) / nGaps), palette ? minGap : 1000) : 0;
+        int x = b.getX();
+        for (size_t gi = 0; gi < groups.size(); ++gi)
+        {
+            for (size_t i = 0; i < groups[gi].size(); ++i)
+            {
+                auto& it = groups[gi][i];
+                it.c->setBounds (x, b.getY(), it.w, b.getHeight());
+                x += it.w + (i + 1 < groups[gi].size() ? it.gapAfter : 0);
+            }
+            if (gi + 1 < groups.size())
+            {
+                seps.push_back (palette ? -(x + gap / 2) : x + gap / 2);
+                x += gap;
+            }
+        }
+        return b.getRight() - x; // what is left over
+    };
+
     // main toolbar: tools, layers, staves and clefs, grid
     {
         auto b = row (r.removeFromTop (kToolbarH));
-        placeL (b, speedyTool, fit (speedyTool), 0);
-        placeL (b, selectTool, fit (selectTool), 8);
-        placeL (b, insertButton, fit (insertButton), 12);
-        separators.push_back (b.getX() - 6);
-        b.removeFromLeft (50); // "LAYER"
-        for (int l = 0; l < kLayers; ++l) placeL (b, layerButtons[l], 30, 0);
-        b.removeFromLeft (12);
-        separators.push_back (b.getX() - 6);
-        placeL (b, clefButton, std::max (96, fit (clefButton)), 6);
-        placeL (b, grandStaffButton, fit (grandStaffButton), 6);
-        placeL (b, staffUpButton, 34, 0);
-        placeL (b, staffDownButton, 34, 12);
-        separators.push_back (b.getX() - 6);
-        placeL (b, gridBox, 136, 0);
-        if (gridBox.getRight() > getWidth() - 10) gridBox.setBounds ({});
+        std::vector<std::vector<Item>> groups;
+        groups.push_back ({ { &speedyTool, fit (speedyTool), 0 }, { &selectTool, fit (selectTool), 8 }, { &insertButton, fit (insertButton), 0 } });
+        std::vector<Item> layers;
+        layers.push_back ({ &layerCaption, 44, 6 });
+        for (int l = 0; l < kLayers; ++l) layers.push_back ({ &layerButtons[l], 34, 0 });
+        groups.push_back (layers);
+        groups.push_back ({ { &clefButton, std::max (100, fit (clefButton)), 8 }, { &grandStaffButton, fit (grandStaffButton), 8 },
+                            { &staffUpButton, 38, 0 }, { &staffDownButton, 38, 0 } });
+        groups.push_back ({ { &gridBox, 150, 0 } });
+        layoutRow (b, groups, separators, false);
     }
 
-    // palette row: tabs, then the open palette's buttons
+    // palette row: tabs, then the open palette's buttons, widened to fill the row
     {
         auto b = row (r.removeFromTop (kPaletteH));
-        for (auto& t : paletteTabs) placeL (b, *t, t->idealWidth() + 2, 0);
+        std::vector<Item> tabs;
         for (size_t i = 0; i < paletteTabs.size(); ++i)
+        {
             paletteTabs[i]->setConnectedEdges ((i > 0 ? juce::Button::ConnectedOnLeft : 0)
                                                | (i + 1 < paletteTabs.size() ? juce::Button::ConnectedOnRight : 0));
-        b.removeFromLeft (14);
-        separators.push_back (-(b.getX() - 7));
-        for (auto& pb : paletteButtons)
-        {
-            const int w = std::max (36, pb->idealWidth());
-            if (w > b.getWidth()) { pb->setBounds ({}); continue; }
-            placeL (b, *pb, w, 4);
+            tabs.push_back ({ paletteTabs[i].get(), paletteTabs[i]->idealWidth() + 6, 0 });
         }
+        int tabsW = 0;
+        for (auto& t : tabs) tabsW += t.w;
+        const int gapButtons = 6;
+        int buttonsW = 0;
+        for (auto& pb : paletteButtons) buttonsW += std::max (38, pb->idealWidth()) + gapButtons;
+        buttonsW -= gapButtons;
+        const int room = b.getWidth() - tabsW - 20 - buttonsW;
+        // share the spare room out over the buttons (up to a sensible size)
+        const int extra = paletteButtons.empty() ? 0 : juce::jlimit (0, 26, room / (int) paletteButtons.size());
+        std::vector<Item> buttons;
+        for (auto& pb : paletteButtons) buttons.push_back ({ pb.get(), std::max (38, pb->idealWidth()) + extra, gapButtons });
+        layoutRow (b, { tabs, buttons }, separators, true);
     }
 
     r.removeFromBottom (kStatusH);

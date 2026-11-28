@@ -54,6 +54,7 @@ private:
     // main toolbar
     IconButton speedyTool { Icon::Pencil, "Speedy" }, selectTool { Icon::Arrow, "Select" }, insertButton { Icon::Insert, "Insert" };
     IconButton layerButtons[staffpaper::kLayers];
+    juce::Label layerCaption;
     IconButton clefButton, grandStaffButton { Icon::None, "Grand staff" };
     IconButton staffUpButton { Icon::StaffUp }, staffDownButton { Icon::StaffDown };
     juce::ComboBox gridBox;

@@ -84,6 +84,7 @@ private:
     const staffpaper::KeyMap* keyMap = nullptr;
     Theme theme = Theme::light (juce::Colour (0xffccff66));
     float space = 9.0f;
+    float stretch = 1.0f, springs = 0; // horizontal spreading to fill the view
     float scrollX = 0, scrollY = 0;
     double playheadTick = -1;
     bool followCursor = true;
